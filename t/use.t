@@ -2,13 +2,16 @@
 use strict;
 use warnings;
 
-use Test::More tests => 3;
+use Test::More;
 
-my @subs = qw( main init_logging );
+my $module = 'CollectGenomes';
+my @subs = qw( main init_logging get_parameters_from_cmd dbi_connect create_database );
 
-use_ok( 'CollectGenomes', @subs);
+use_ok( $module, @subs);
 
-can_ok( __PACKAGE__, 'main');
-can_ok( __PACKAGE__, 'init_logging' );
+foreach my $sub (@subs) {
+    can_ok( $module, $sub);
+}
 
+done_testing();
 

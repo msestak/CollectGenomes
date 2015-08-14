@@ -30,6 +30,8 @@ our $VERSION = "0.01";
 our @EXPORT_OK = qw{
 	main
     init_logging
+	get_parameters_from_cmd
+	dbi_connect
 	create_database
 	ftp_robust
 	extract_nr
@@ -265,9 +267,12 @@ sub init_logging {
     croak 'init_logging() does not need parameters' unless @_ == 0;
 
 	#create log file in same dir where script is running
-    my $dir_out      = path($0)->parent->absolute;            #removes perl script and takes absolute path from path
-	my ($app_name) = path($0)->basename =~ m{\A(.+)\.p[l|m]\z};   #takes name of the script and removes .pl
-	my $logfile = path($dir_out, $app_name . '.log')->canonpath;         #combines all of above with .log
+    my $dir_out      = path($0)->parent->absolute;                   #removes perl script and takes absolute path from rest of path
+	#say '$dir_out:', $dir_out;
+	my ($app_name) = path($0)->basename =~ m{\A(.+)\.(?:.+)\z};   #takes name of the script and removes .pl or .pm or .t
+	#say '$app_name:', $app_name;
+	my $logfile = path($dir_out, $app_name . '.log')->canonpath;     #combines all of above with .log
+	#say '$logfile:', $logfile;
 	
 =for Regexes:
     # comment previous 3 lines when debugging regexes with Regexp::Debugger to disable this regex
