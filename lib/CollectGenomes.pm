@@ -202,8 +202,8 @@ sub get_parameters_from_cmd {
     pod2usage( -verbose => 1 ) if $help;
     pod2usage( -verbose => 2 ) if $man;
 
-    $log->warn('No @MODE specified on command line') unless @MODE;
-    pod2usage( -verbose => 1 ) unless @MODE;
+    $log->fatal('No @MODE specified on command line') unless @MODE;
+	#pod2usage( -verbose => 1 ) unless @MODE;
 
     if ($OUT) {
         $log->trace( 'My output path: ', path($OUT) );
