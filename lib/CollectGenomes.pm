@@ -33,6 +33,7 @@ our @EXPORT_OK = qw{
 	get_parameters_from_cmd
 	dbi_connect
 	create_database
+	capture_output
 	ftp_robust
 	extract_nr
 	load_nr
@@ -415,7 +416,7 @@ sub create_database {
 }
 
 ### INTERNAL UTILITY ###
-# Usage      : capture_output();
+# Usage      : my ($stdout, $stderr, $exit) = capture_output( $cmd, $param_href );
 # Purpose    : accepts command, executes it, captures output and returns it in vars
 # Returns    : STDOUT, STDERR and EXIT as vars
 # Parameters : ($cmd_to_execute)
@@ -435,7 +436,7 @@ sub capture_output {
     };
 
     if ($VERBOSE) {
-        $log->trace( 'STDOUT  is: ', "$stdout", "\n", 'STDERR   is: ', "$stderr", "\n", 'EXIT    is: ', "$exit" );
+        $log->trace( 'STDOUT is: ', "$stdout", "\n", 'STDERR  is: ', "$stderr", "\n", 'EXIT   is: ', "$exit" );
     }
 
     return  $stdout, $stderr, $exit;
