@@ -29,6 +29,9 @@ requires 'POSIX';
 requires 'IO::Prompter';
 requires 'File::Find::Rule';
 requires 'FindBin';
+requires 'HTML::TreeBuilder';
+requires 'LWP::Simple';
+
 
 author_requires 'Regexp::Debugger';
 

@@ -31,3 +31,13 @@ MYMETA.*
 /CollectGenomes-*
 
 *.log
+/species_EnsemblBacteria.txt
+/species_EnsemblFungi.txt
+/species_EnsemblMetazoa.txt
+/species_EnsemblPlants.txt
+/species_EnsemblProtists.txt
+/statistics_ensembl_all.txt
+
+ensembl*
+
+
