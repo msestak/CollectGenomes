@@ -615,21 +615,35 @@ sub ensembl_ftp_vertebrates {
             }
 
             #crucial to send $ftp to the sub (else it uses old one from previous division)
-            ftp_get_proteome( $species_dir_out, $ftp, $table_ensembl_end, $dbh, $param_href );
+            ftp_get_proteome(
+                { DIR => $species_dir_out, FTP => $ftp, TABLE => $table_ensembl_end, DBH => $dbh, %{$param_href} } );
         }
 
 	return;
 }
 
-#helping ftp sub
+### INTERNAL UTILITY ###
+# Usage      : ftp_get_proteome(
+#            : { DIR => $species_dir_out, FTP => $ftp, TABLE => $table_ensembl_end, DBH => $dbh, %{$param_href} } );
+# Purpose    : downloads proteomes
+# Returns    : nothing
+# Parameters : hash_ref
+# Throws     : 
+# Comments   : it reconnects - usable for long downloads
+# See Also   : calling sub (mode) ensembl_vertebrates()
 sub ftp_get_proteome {
 	my $log = Log::Log4perl::get_logger("main");
-    $log->logcroak( 'ftp_file() needs a $param_href' ) unless @_ == 5;
+    $log->logcroak( 'ftp_file() needs a $param_href' ) unless @_ == 1;
 
-	my ($species_dir, $ftp, $table_info, $dbh, $param_href ) = @_;
-	my $OUT      = $param_href->{OUT}      or $log->logcroak( 'no $OUT specified on command line!' );
-	my $REMOTE_HOST = $param_href->{REMOTE_HOST} //= 'ftp.ensembl.org';
-	my $REMOTE_DIR  = $param_href->{REMOTE_DIR}  //= 'pub/current_fasta/';
+    my ($param_href) = @_;
+
+    my $OUT         = $param_href->{OUT}   or $log->logcroak('no $OUT specified on command line!');
+    my $species_dir = $param_href->{DIR}   or $log->logcroak('no $species_dir sent to ftp_get_proteome!');
+    my $ftp         = $param_href->{FTP}   or $log->logcroak('no $ftp sent to ftp_get_proteome!');
+    my $table_info  = $param_href->{TABLE} or $log->logcroak('no $table_info sent to ftp_get_proteome!');
+    my $dbh         = $param_href->{DBH}   or $log->logcroak('no $dbh sent to ftp_get_proteome!');
+    my $REMOTE_HOST = $param_href->{REMOTE_HOST} //= 'ftp.ensembl.org';
+    my $REMOTE_DIR  = $param_href->{REMOTE_DIR}  //= 'pub/current_fasta/';
 
 	$log->trace("Action: working with $species_dir" );
 	$log->trace("Report: location: ", $ftp->pwd() );
@@ -746,7 +760,41 @@ sub ftp_get_proteome {
 
 	return;
 
-}   #end sub
+}
+
+
+
+### INTERNAL UTILITY ###
+# Usage      : create_table( { TABLE_NAME => $table_info, DBH => $dbh, QUERY => $create_info, %{$param_href} } );
+# Purpose    : it drops and creates table
+# Returns    : nothing
+# Parameters : 
+# Throws     : errors if it fails
+# Comments   : 
+# See Also   : 
+sub create_table {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('create_table() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    my $table_name   = $param_href->{TABLE_NAME} or $log->logcroak('no $table_name sent to create_table()!');
+    my $dbh          = $param_href->{DBH}        or $log->logcroak('no $dbh sent to create_table()!');
+    my $create_query = $param_href->{QUERY}      or $log->logcroak('no $create_query sent to create_table()!');
+
+	#create table in database specified in connection
+    my $drop_query = sprintf( qq{
+    DROP TABLE IF EXISTS %s
+    }, $dbh->quote_identifier($table_name) );
+    eval { $dbh->do($drop_query) };
+    $log->error("Action: dropping $table_name failed: $@") if $@;
+    $log->info("Action: $table_name dropped successfully!") unless $@;
+
+    eval { $dbh->do($create_query) };
+    $log->error( "Action: creating $table_name failed: $@" ) if $@;
+    $log->info( "Action: $table_name created successfully!" ) unless $@;
+
+    return;
+}
 
 
 ### INTERFACE SUB ###
@@ -759,39 +807,32 @@ sub ftp_get_proteome {
 # See Also   : 
 sub ensembl_ftp {
     my $log = Log::Log4perl::get_logger("main");
-    $log->logcroak( 'ensembl_ftp() needs a $param_href' ) unless @_ == 1;
-    my ( $param_href ) = @_;
+    $log->logcroak('ensembl_ftp() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
 
-	my $DATABASE = $param_href->{DATABASE} or $log->logcroak( 'no $DATABASE specified on command line!' );
-	my $OUT      = $param_href->{OUT}      or $log->logcroak( 'no $OUT specified on command line!' );
-	my $REMOTE_HOST = $param_href->{REMOTE_HOST} //= 'ftp.ensemblgenomes.org';
-			
-	#get new handle
+    my $OUT      = $param_href->{OUT}      or $log->logcroak('no $OUT specified on command line!');
+    my $DATABASE = $param_href->{DATABASE} or $log->logcroak('no $DATABASE specified on command line!');
+    my $ENGINE = defined $param_href->{ENGINE} ? $param_href->{ENGINE} : 'InnoDB';
+    my $REMOTE_HOST = $param_href->{REMOTE_HOST} //= 'ftp.ensemblgenomes.org';
+
+    #get new handle
     my $dbh = dbi_connect($param_href);
 
-	#file for statistics and header information (print to outside $OUT)
-	my $stat_file = path($OUT)->parent;
-	$stat_file = path($stat_file, 'statistics_ensembl_all.txt')->canonpath;
-	if (-f $stat_file) {
-		unlink $stat_file and $log->warn( "Action: unlinked $stat_file" );
-	}
-	open my $stat_fh, '>>', $stat_file or die "can't open file: $!";
-	#write header to stats file
-	print {$stat_fh} "remote_path\tlocal_path\tgzip_file\theader\tNum_genes\n";
+    #file for statistics and header information (print to outside $OUT)
+    my $stat_file = path($OUT)->parent;
+    $stat_file = path( $stat_file, 'statistics_ensembl_all.txt' )->canonpath;
+    if ( -f $stat_file ) {
+        unlink $stat_file and $log->warn("Action: unlinked $stat_file");
+    }
+    open my $stat_fh, '>>', $stat_file or die "can't open file: $!";
 
+    #write header to stats file
+    print {$stat_fh} "remote_path\tlocal_path\tgzip_file\theader\tNum_genes\n";
 
 	#create INFO table in database (to import later for each division)
 	my $table_info = "species_ensembl_divisions$$";
-    my $drop_info = qq{
-    DROP TABLE IF EXISTS $table_info
-    };
-    eval { $dbh->do($drop_info) };
-    $log->info("Acton: drop $table_info failed: $@") if $@;
-    $log->info("Action: $table_info dropped successfully!") unless $@;
-
-    #create table
-    my $create_info = qq{
-    CREATE TABLE $table_info (
+	my $create_info = sprintf( qq{
+    CREATE TABLE %s (
 	species_name VARCHAR(200) NOT NULL,
 	species VARCHAR(200) NOT NULL,
 	division VARCHAR(50) NOT NULL,
@@ -809,12 +850,8 @@ sub ensembl_ftp {
 	invis VARCHAR(10),
     PRIMARY KEY(ti, species),
 	KEY(species)
-    )ENGINE=TokuDB CHARSET=ascii
-    };
-    eval { $dbh->do($create_info) };
-    $log->info( "Action: Create $table_info failed: $@" ) if $@;
-    $log->info( "Action: $table_info created successfully!" ) unless $@;
-
+    )ENGINE=$ENGINE CHARSET=ascii }, $dbh->quote_identifier($table_info) );
+	create_table( { TABLE_NAME => $table_info, DBH => $dbh, QUERY => $create_info, %{$param_href} } );
 
 	#iterate over genome divisions:
 	my @divisions = qw/metazoa fungi protists plants bacteria/;
@@ -918,136 +955,19 @@ sub ensembl_ftp {
 				$ftp->cwd($species_dir_out) and $log->warn( qq|Action: cwd to $species_dir_out: working inside collection| );
 				my @collection_listing = $ftp->ls;
 				foreach my $species_in_coll (@collection_listing) {
-					ftp_file($species_in_coll, $ftp);
+					#crucial to send $ftp to the sub (else it uses old one from previous division)
+            		ftp_get_proteome(
+            		    { DIR => $species_in_coll, FTP => $ftp, TABLE => $table_info, DBH => $dbh, %{$param_href} } );
 				}
 				$ftp->cdup() and $log->warn( qq|Action: cwd out of collection: $species_dir_out| );
 			}
 			else {
-				ftp_file($species_dir_out, $ftp);   #crucial to send $ftp to the sub (else it uses old one from previous division)
+				#normal ftp (outside collection)
+				#crucial to send $ftp to the sub (else it uses old one from previous division)
+            	ftp_get_proteome(
+            	    { DIR => $species_dir_out, FTP => $ftp, TABLE => $table_info, DBH => $dbh, %{$param_href} } );
 			}
 			
-			sub ftp_file {
-				my $species_dir = shift;
-				my $ftp = shift;
-
-				$log->trace("Action: working with $species_dir" );
-				$log->trace("Report: location: ", $ftp->pwd() );
-				
-				my $spec_path = path($species_dir, 'pep');
-				$ftp->cwd($spec_path) or $log->logdie( qq|Can't change working directory to $spec_path:|, $ftp->message );
-
-				#get taxid based on name of species_dir (for final output file)
-				my $get_taxid_query = sprintf(qq{
-				SELECT ti
-				FROM %s
-				WHERE species = ?}, $dbh->quote_identifier($table_info) );
-				#say $get_taxid_query; sleep 5;
-				my $sth = $dbh->prepare($get_taxid_query);
-				$sth->execute($species_dir);
-				my $tax_id;
-				$sth->bind_col(1, \$tax_id, {TYPE => 'integer'} );
-				#my $mysql_type_name = $sth->{mysql_type_name};
-				#say Dumper($mysql_type_name); sleep 5;
-				$sth->fetchrow_arrayref();
-				#say $tax_id; sleep 5;
-
-				if (!$tax_id) {
-					#some entries (dirs) are not present in info file (like D. melanogaster
-					#found in ensembl.org and not ensembl.genomes.org (but found on ftp)
-					$log->error( qq|Report: $species_dir not found in $table_info (not found in info files (probably on ensembl.org))| );
-					#print {$stat_fh} "$species_dir skipped\n";
-					$ftp->cdup();   #go 2 dirs up to $REMOTE_DIR (cdup = current dir up)
-					$ftp->cdup();   #cwd goes only down or cwd(..) goes to parent (cwd() goes to root)
-					return;
-				}
-
-
-				#get fasta file inside
-				my @pep_listing = $ftp->ls;
-				FILE:
-				foreach my $proteome (@pep_listing) {
-				    next FILE unless $proteome =~ m/pep.all.fa.gz\z/;
-					my $local_file = path($OUT, $proteome);
-	
-					#delete gzip file if it exists
-					if (-f $local_file) {
-						unlink $local_file and $log->warn( "Action: unlinked $local_file" );
-					}
-	
-					#opens a filehnadle to $OUT dir and downloads file there
-					open my $local_fh, ">", $local_file or $log->logdie( "Can't write to $local_file:$!" );
-					#say ref($local_fh);   prints GLOB
-					$ftp->get($proteome, $local_fh) and $log->info( "Action: download to $local_file" );
-					#Net::FTP get(REMOTE_FILE, LOCAL_FILE) accepts filehandle as LOCAL_FILE.
-	
-					#print stats and go up 2 dirs
-					print {$stat_fh} path($REMOTE_HOST, $remote_path, $spec_path, $proteome), "\t", $local_file, "\t";
-					$ftp->cdup();   #go 2 dirs up to $REMOTE_DIR (cdup = current dir up)
-					$ftp->cdup();   #cwd goes only down or cwd(..) goes to parent (cwd() goes to root)
-	
-					#extract file from archive
-					my $ae = Archive::Extract->new( archive => "$local_file" );
-					my $ae_path;
-					my $ok = do {
-						$ae->extract(to => $OUT) or $log->logdie( $ae->error );
-						my $ae_file = $ae->files->[0];
-						$ae_path = path($OUT, $ae_file);
-						$log->info( "Action: extracted to $ae_path" );
-					};
-					#delete gziped file
-					unlink $local_file and $log->trace( qq|Action: unlinked $local_file| );
-
-
-
-					#BLOCK for writing proteomes to taxid file
-					{
-						open my $extracted_fh, "<", $ae_path  or $log->logdie( "Can't open $ae_path: $!" );
-						my $path_taxid = path($OUT, $tax_id);
-		    	    	open my $genome_ti_fh, ">", $path_taxid or $log->logdie( "Can't write $tax_id: $!" );
-		    	    	
-		    	    	#return $/ value to newline for $header_first_line
-		    	    	local $/ = "\n";
-		    	    	my $header_first_line = <$extracted_fh>;
-						#$header_first_line =~ s/\n//g;
-		    	    	print {$stat_fh} $header_first_line, "\t";
-		    	    	
-		    	    	#return to start of file
-		    	    	seek $extracted_fh, 0, 0;
-		    	    	#look in larger chunks between records
-		    	    	local $/ = ">";
-		    	    	my $line_count = 0;
-		    	    	while (<$extracted_fh>) {
-							chomp;
-		    	    		$line_count++;
-		    	
-		    	    		if (m/\A([^\h]+)(?:\h+)*(?:[^\v]+)*\v(.+)/s) {
-		    	
-								my $header = $1;
-		    	
-								my $fasta_seq = $2;
-		    	    			$fasta_seq =~ s/\R//g;  #delete multiple newlines (also forgets %+ hash)
-								$fasta_seq =~ s/[+* -._]//g;
-								$fasta_seq =~ s/\d+//;
-								$fasta_seq = uc $fasta_seq;
-		    	  
-		    	    			print $genome_ti_fh ('>', $header, "\n", $fasta_seq, "\n");
-							}
-						}   #end while
-						if ($line_count) {
-							$line_count--;   #it has one line to much
-							$log->debug( qq|Action: saved to $path_taxid with $line_count lines| );
-							print {$stat_fh} $line_count, "\n";
-						}
-					}   #block writing proteomes to taxid end
-					unlink $ae_path and $log->trace( qq|Action: unlinked $ae_path| );
-				}   #forach FILE inside DIR end
-
-				return;
-
-			}   #end sub
-
-
-
 		}   #foreach DIR inside division end
 			$log->error( "Action: closing ftp connection for $division" );   #restart for every division
 
