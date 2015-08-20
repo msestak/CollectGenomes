@@ -97,7 +97,8 @@ $tlog->trace(qr/My \@ARGV:/);
 $tlog->trace(qr/before/);
 $tlog->trace(qr/after/);
 $tlog->fatal(qr/command line/);
-my ($param_href) = get_parameters_from_cmd();
+$param_href = '';
+($param_href) = get_parameters_from_cmd();
 Test::Log::Log4perl->end(qq|Report: sub get_parameters_from_cmd logging works|);
 
 

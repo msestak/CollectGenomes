@@ -763,7 +763,7 @@ sub ftp_get_proteome {
 
 
 ### INTERNAL UTILITY ###
-# Usage      : create_table( { TABLE_NAME => $table_info, DBH => $dbh, QUERY => $create_info, %{$param_href} } );
+# Usage      : create_table( { TABLE_NAME => $table_info, DBH => $dbh, QUERY => $create_query, %{$param_href} } );
 # Purpose    : it drops and creates table
 # Returns    : nothing
 # Parameters : 
@@ -1037,7 +1037,7 @@ sub extract_and_load_nr {
 
 	my $OUT         = $param_href->{OUT}         or $log->logcroak( 'no $OUT specified on command line!' );
 	my $INFILE      = $param_href->{INFILE}      or $log->logcroak( 'no $INFILE specified on command line!' );
-	my $ENGINE      = $param_href->{ENGINE}      or $log->logcroak( 'no $ENGINE specified on command line!' );
+    my $ENGINE = defined $param_href->{ENGINE} ? $param_href->{ENGINE} : 'InnoDB';
 
 	#open gziped file without decompressing it
 	#get date for nr file naming
@@ -1172,7 +1172,7 @@ sub extract_and_load_nr {
     	$log->trace( "Report: import inserted $rows rows!" );
 
     	#report success or failure
-    	$log->debug( "Report: loading $table failed: $@" ) if $@;
+    	$log->error( "Report: loading $table failed: $@" ) if $@;
     	$log->debug( "Report: table $table loaded successfully!" ) unless $@;
 
 		$dbh->disconnect;
@@ -1202,7 +1202,7 @@ sub extract_and_load_gi_taxid {
 
 	my $OUT         = $param_href->{OUT}         or $log->logcroak( 'no $OUT specified on command line!' );
 	my $INFILE      = $param_href->{INFILE}      or $log->logcroak( 'no $INFILE specified on command line!' );
-	my $ENGINE      = $param_href->{ENGINE}      or $log->logcroak( 'no $ENGINE specified on command line!' );
+    my $ENGINE = defined $param_href->{ENGINE} ? $param_href->{ENGINE} : 'InnoDB';
 
 	#open gziped file without decompressing it
 	open my $nr_fh, "<:gzip", $INFILE or $log->logdie( "Can't open gzipped file $INFILE: $!" );
@@ -1312,7 +1312,7 @@ sub extract_and_load_gi_taxid {
     	$log->trace( "Report: import inserted $rows rows!" );
 
     	#report success or failure
-    	$log->debug( "Report: loading $table failed: $@" ) if $@;
+    	$log->error( "Report: loading $table failed: $@" ) if $@;
     	$log->debug( "Report: table $table loaded successfully!" ) unless $@;
 
 		$dbh->disconnect;
@@ -1341,7 +1341,7 @@ sub ti_gi_fasta {
     my ( $param_href ) = @_;
 
 	my $DATABASE = $param_href->{DATABASE}    or $log->logcroak( 'no $DATABASE specified on command line!' );
-	my $ENGINE   = $param_href->{ENGINE}      or $log->logcroak( 'no $ENGINE specified on command line!' );
+    my $ENGINE = defined $param_href->{ENGINE} ? $param_href->{ENGINE} : 'InnoDB';
 			
 	#get new handle
     my $dbh = dbi_connect($param_href);
@@ -1355,18 +1355,18 @@ sub ti_gi_fasta {
     my @tables = map { $_->[0] } @{ $dbh->selectall_arrayref($select_tables) };
 
     #ask to choose nr
-    my $table_nr= prompt 'Choose which nr table you want to use ',
+    my $table_nr= prompt 'Choose NR table to use ',
       -menu => [ @tables ],
 	  -number,
       '>';
     $log->trace( "Report: using NR: $table_nr" );
 
     #ask to choose gi_taxid
-    my $table_gi_taxid= prompt 'Choose which gi_taxid_prot.dmp table you want to use ',
+    my $table_gi_taxid= prompt 'Choose GI_TAXID_PROT table to use ',
       -menu => [ @tables ],
 	  -number,
       '>';
-    $log->trace( "Report: using GI_TAXID: $table_gi_taxid" );
+    $log->trace( "Report: using GI_TAXID_PROT: $table_gi_taxid" );
 
     #report what are you doing
     $log->info( "---------->JOIN-ing two tables: $table_nr and $table_gi_taxid" );
@@ -1413,7 +1413,7 @@ sub ti_gi_fasta {
     $log->trace( "Report: import inserted $rows rows!" );
 
     #report success or failure
-    $log->debug( "Report: loading $table_base failed: $@" ) if $@;
+    $log->error( "Report: loading $table_base failed: $@" ) if $@;
     $log->debug( "Report: table $table_base loaded successfully!" ) unless $@;
 
 	$dbh->disconnect;
@@ -1421,6 +1421,149 @@ sub ti_gi_fasta {
 	return;
 }
 
+
+### INTERFACE SUB ###
+# Usage      : import_names( $param_href );
+# Purpose    : loads names.tsv.updated to MySQL database
+# Returns    : nothing
+# Parameters : ( $param_href )
+# Throws     : croaks for parameters
+# Comments   : works on new format with tabs
+# See Also   :
+sub import_names {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('import_names() needs a hash_ref') unless @_ == 1;
+    my ($param_href) = @_;
+
+    my $INFILE   = $param_href->{INFILE}   or $log->logcroak('no $INFILE specified on command line!');
+    my $DATABASE = $param_href->{DATABASE} or $log->logcroak('no $DATABASE specified on command line!');
+    my $ENGINE = defined $param_href->{ENGINE} ? $param_href->{ENGINE} : 'InnoDB';
+    my $table = path($INFILE)->basename;
+    $table =~ s/\./_/g;    #for files that have dots in name)
+
+    #get new handle
+    my $dbh = dbi_connect($param_href);
+
+    #report what are you doing
+    $log->info("---------->Importing names $table");
+
+    my $create_query = sprintf( qq{
+    CREATE TABLE %s (
+    id INT UNSIGNED AUTO_INCREMENT NOT NULL,
+    ti INT UNSIGNED NOT NULL,
+    species_name VARCHAR(200) NOT NULL,
+    species_synonym VARCHAR(100),
+    name_type VARCHAR(100),
+    PRIMARY KEY(id, ti),
+	KEY(ti),
+    KEY(species_name)
+    )ENGINE=$ENGINE CHARACTER SET=ascii }, $dbh->quote_identifier($table) );
+	create_table( { TABLE_NAME => $table, DBH => $dbh, QUERY => $create_query, %{$param_href} } );
+	say $create_query;
+
+    #import table
+    my $load_query = qq{
+    LOAD DATA INFILE '$INFILE'
+    INTO TABLE $table } . q{ FIELDS TERMINATED BY '\t'
+    LINES TERMINATED BY '\n' 
+    (ti, species_name, species_synonym, name_type) 
+    };
+    eval { $dbh->do( $load_query, { async => 1 } ) };
+
+    #check status while running
+    my $dbh_check             = dbi_connect($param_href);
+    until ( $dbh->mysql_async_ready ) {
+        my $processlist_query = qq{
+        SELECT TIME, STATE FROM INFORMATION_SCHEMA.PROCESSLIST
+        WHERE DB = ? AND INFO LIKE 'LOAD DATA INFILE%';
+        };
+        my ( $time, $state );
+        my $sth = $dbh_check->prepare($processlist_query);
+        $sth->execute($DATABASE);
+        $sth->bind_columns( \( $time, $state ) );
+        while ( $sth->fetchrow_arrayref ) {
+            my $process = sprintf( "Time running:%0.3f sec\tSTATE:%s\n", $time, $state );
+            $log->trace($process);
+            sleep 1;
+        }
+    }
+    my $rows = $dbh->mysql_async_result;
+    $log->trace( "Report: import inserted $rows rows!" );
+
+    #report success or failure
+    $log->error( "Report: loading $table failed: $@" ) if $@;
+    $log->debug( "Report: table $table loaded successfully!" ) unless $@;
+
+    return;
+}
+
+### INTERFACE SUB ###
+# Usage      : import_nodes( $param_href );
+# Purpose    : loads nodes.tsv.updated to MySQL
+# Returns    : nothing
+# Parameters : ( $param_href )
+# Throws     : croaks for parameters
+# Comments   : new format with tabs
+# See Also   :
+sub import_nodes {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak ('import_nodes() needs a hash_ref' ) unless @_ == 1;
+    my ($param_href) = @_;
+
+	my $INFILE   = $param_href->{INFILE}      or $log->logcroak( 'no $INFILE specified on command line!' );
+	my $DATABASE = $param_href->{DATABASE}    or $log->logcroak( 'no $DATABASE specified on command line!' );
+    my $ENGINE = defined $param_href->{ENGINE} ? $param_href->{ENGINE} : 'InnoDB';
+    my $table    = path($INFILE)->basename;
+    $table =~ s/\./_/g;    #for files that have dots in name)
+
+    #get new handle
+    my $dbh = dbi_connect($param_href);
+
+    #report what are you doing
+    $log->info( "---------->Importing nodes $table" );
+    my $create_query = sprintf( qq{
+    CREATE TABLE IF NOT EXISTS %s (
+    ti INT UNSIGNED NOT NULL,
+    parent_ti INT UNSIGNED NOT NULL,
+    PRIMARY KEY(ti),
+    KEY(parent_ti)
+    )ENGINE=$ENGINE CHARACTER SET=ascii }, $dbh->quote_identifier($table) );
+	create_table( { TABLE_NAME => $table, DBH => $dbh, QUERY => $create_query, %{$param_href} } );
+
+    #import table
+    my $load_query = qq{
+    LOAD DATA INFILE '$INFILE'
+    INTO TABLE $table } . q{ FIELDS TERMINATED BY '\t'
+    LINES TERMINATED BY '\n' 
+    };
+    eval { $dbh->do( $load_query, { async => 1 } ) };
+
+    #check status while running
+    my $dbh_check             = dbi_connect($param_href);
+    until ( $dbh->mysql_async_ready ) {
+        my $processlist_query = qq{
+        SELECT TIME, STATE FROM INFORMATION_SCHEMA.PROCESSLIST
+        WHERE DB = ? AND INFO LIKE 'LOAD DATA INFILE%';
+        };
+        my ( $time, $state );
+        my $sth = $dbh_check->prepare($processlist_query);
+        $sth->execute($DATABASE);
+        $sth->bind_columns( \( $time, $state ) );
+        while ( $sth->fetchrow_arrayref ) {
+            my $process = sprintf( "Time running:%0.3f sec\tSTATE:%s\n", $time, $state );
+            $log->trace( $process );
+            sleep 1;
+        }
+    }
+    my $rows = $dbh->mysql_async_result;
+    $log->trace( "Report: import inserted $rows rows!" );
+
+    #report success or failure
+    $log->error( "Report: loading $table failed: $@" ) if $@;
+    $log->debug( "Report: table $table loaded successfully!" ) unless $@;
+
+    return;
+}
 
 
 
@@ -1442,7 +1585,7 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
 
  Part I -> download genomes from Ensembl:
 
- perl ./lib/CollectGenomes.pm --mode=create_db -i . -ho localhost -d nr -p msandbox -u msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ perl ./lib/CollectGenomes.pm --mode=create_db -ho localhost -d nr -p msandbox -u msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
  perl ./lib/CollectGenomes.pm --mode=ensembl_ftp --out=./ensembl_ftp/ -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
@@ -1462,19 +1605,23 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
 
  perl ./lib/CollectGenomes.pm --mode=gi_taxid -if ./nr/gi_taxid_prot.dmp.gz -o ./nr/ -ho localhost -u msandbox -p msandbox -d nr --port=5625 --socket=/tmp/mysql_sandbox5625.sock --engine=InnoDB
 
+ perl ./lib/CollectGenomes.pm --mode=ti_gi_fasta -d nr -ho localhost -u msandbox -p msandbox --port=5625 --socket=/tmp/mysql_sandbox5625.sock --engine=InnoDB
+
+ Part IV -> set phylogeny for focal species:
+
+ perl ./lib/CollectGenomes.pm --mode=import_names -if ./nr/names_martin7 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=InnoDB
+
+ perl ./lib/CollectGenomes.pm --mode=import_nodes -if ./nr/nodes_martin7 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=InnoDB
 
 
 
- perl ./bin/CollectGenomes.pm --mode=ti_gi_fasta  -o . -d nr -ho localhost -u msandbox -p msandbox --port=5624 --socket=/tmp/mysql_sandbox5624.sock --engine=Deep
-
- perl ./bin/CollectGenomes.pm --mode=import_names -i ./t_eukarya/names_martin7 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
-
- perl ./bin/CollectGenomes.pm --mode=import_nodes -i ./t_eukarya/nodes_martin7 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
  perl blastdb_analysis.pl -mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_martin7 -t 9606 -org hs -h localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
  or
  perl blastdb_analysis.pl -mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo -no nodes_martin7 -t 9606 -org hs -h localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
  perl blastdb_analysis.pl -mode=call_phylo -no nodes_martin7 -t 2759 -org eu --proc=proc_create_phylo16278 -h localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+
+ Part V -> get genomes from nr base:
 
  perl ./bin/CollectGenomes.pm --mode=get_existing_ti --in=./t_eukarya/ -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
@@ -1489,13 +1636,14 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
  perl ./bin/CollectGenomes.pm --mode=copy_existing_genomes --in=/home/msestak/dropbox/Databases/db_29_07_15/data/eukarya_old/  --out=/home/msestak/dropbox/Databases/db_29_07_15/data/eukarya/ -ho localhost -d nr -u msandbox -p msandbox -po 5622 -s /tmp/mysql_sandbox5622.sock
 
 
+ Part VI -> prepare and run cd-hit
  perl ./bin/CollectGenomes.pm --mode=prepare_cdhit_per_phylostrata --in=./data_in/t_eukarya/ --out=./data_out/ -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
  perl ./bin/CollectGenomes.pm --mode=prepare_cdhit_per_phylostrata --in=/home/msestak/dropbox/Databases/db_29_07_15/data/archaea/ --out=/home/msestak/dropbox/Databases/db_29_07_15/data/cdhit/ -ho localhost -d nr -u msandbox -p msandbox -po 5622 -s /tmp/mysql_sandbox5622.sock
 
 
  perl ./bin/CollectGenomes.pm --mode=run_cdhit --in=/home/msestak/dropbox/Databases/db_29_07_15/data/cdhit/cd_hit_cmds --out=/home/msestak/dropbox/Databases/db_29_07_15/data/cdhit/ -ho localhost -d nr -u msandbox -p msandbox -po 5622 -s /tmp/mysql_sandbox5622.sock -v
 
-
+ Part VII -> prepare BLAST and run it:
 
 =head1 DESCRIPTION
 
