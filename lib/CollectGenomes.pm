@@ -26,6 +26,7 @@ use File::Find::Rule;
 #use Regexp::Debugger;
 use HTML::TreeBuilder;
 use LWP::Simple;
+use DateTime::Tiny;
 
 our $VERSION = "0.01";
 
@@ -37,8 +38,6 @@ our @EXPORT_OK = qw{
 	create_database
 	capture_output
 	ftp_robust
-	extract_nr
-	load_nr
 	extract_and_load_nr
     extract_and_load_gi_taxid
 	ti_gi_fasta
@@ -102,7 +101,7 @@ sub main {
     #dispatch table is hash (could be also hash_ref)
     my %dispatch = (
         create_db                     => \&create_database,
-        ftp                           => \&ftp_robust,
+        nr_ftp                        => \&ftp_robust,
         extract_nr                    => \&extract_nr,
         load_nr                       => \&load_nr,
         extract_and_load_nr           => \&extract_and_load_nr,
@@ -215,7 +214,7 @@ sub get_parameters_from_cmd {
     }
     if ($IN) {
         $log->trace( 'My input path: ', path($IN) );
-        $IN = path($INFILE)->absolute->canonpath;
+        $IN = path($IN)->absolute->canonpath;
         $log->trace( 'My absolute input path: ', path($IN) );
     }
     if ($OUTFILE) {
@@ -763,7 +762,6 @@ sub ftp_get_proteome {
 }
 
 
-
 ### INTERNAL UTILITY ###
 # Usage      : create_table( { TABLE_NAME => $table_info, DBH => $dbh, QUERY => $create_info, %{$param_href} } );
 # Purpose    : it drops and creates table
@@ -981,11 +979,447 @@ sub ensembl_ftp {
 }
 
 
+### INTERFACE SUB ###
+# Usage      : ftp_robust($param_href );
+# Purpose    : ftp download of NCBI files (generic) or some other ftp server
+# Returns    : nothing
+# Parameters : ( $param_href )
+# Throws     : croaks for parameters
+# Comments   : it tries 10 times every 10 seconds
+#            : ftp.ncbi.nih.gov is default server
+# See Also   : it uses https://metacpan.org/pod/Net::FTP::Robust 
+sub ftp_robust {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak( 'ftp_download() needs a $param_href' ) unless @_ == 1;
+    my ( $param_href ) = @_;
+
+	my $OUT         = $param_href->{OUT}         or $log->logcroak( 'no $OUT specified on command line!' );
+	my $REMOTE_DIR  = $param_href->{REMOTE_DIR}  or $log->logcroak( 'no $REMOTE_DIR specified on command line!' );
+	my $REMOTE_FILE = $param_href->{REMOTE_FILE} or $log->logcroak( 'no $REMOTE_FILE specified on command line!' );
+	my $REMOTE_HOST = $param_href->{REMOTE_HOST} //= 'ftp.ncbi.nih.gov';
+
+	#params for ftp server (e.g., NCBI BLAST DB)
+	my $remote_file = path($REMOTE_DIR, $REMOTE_FILE);
+	#say $remote_file;
+	my $local_dir  = path($OUT)->canonpath;
+	#say $local_dir;
+
+    my $ftp = Net::FTP::Robust->new
+	  ( Host           => $REMOTE_HOST,
+		login_attempts => 10,
+		login_delay    => 10,
+		user           => 'anonymous',
+		password       => 'msestak@irb.hr',
+
+      );
+    
+	#it needs remote FILE location, and local DIR location (not file)
+	#local filename is remote filename
+    $ftp->get($remote_file, $local_dir);
+	
+	return;
+}
+
+### INTERFACE SUB ###
+# Usage      : extract_and_load_nr($param_href );
+# Purpose    : extracts NCBI nr.gz file and LOADs it into MySQL database
+# Returns    : nothing
+# Parameters : ( $param_href )
+# Throws     : croaks for parameters
+# Comments   : it works on Linux only because it uses Linux named pipes
+#            : it runs fork: Perl is child, MySQL parent
+#            : can work with different MySQL storage engines
+# See Also   : it uses https://metacpan.org/pod/PerlIO::gzip to open gziped file without decompressing it
+sub extract_and_load_nr {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak( 'extract_and_load_nr() needs a $param_href' ) unless @_ == 1;
+    my ( $param_href ) = @_;
+
+	my $OUT         = $param_href->{OUT}         or $log->logcroak( 'no $OUT specified on command line!' );
+	my $INFILE      = $param_href->{INFILE}      or $log->logcroak( 'no $INFILE specified on command line!' );
+	my $ENGINE      = $param_href->{ENGINE}      or $log->logcroak( 'no $ENGINE specified on command line!' );
+
+	#open gziped file without decompressing it
+	#get date for nr file naming
+    my $now  = DateTime::Tiny->now;
+    my $date = $now->year . '_' . $now->month . '_' . $now->day;
+	open my $nr_fh, "<:gzip", $INFILE or $log->logdie( "Can't open gzipped file $INFILE: $!" );
+	
+	#delete pipe if exists (you can't load into more than 1 same engine db at the same time)
+	my $load_file = path($OUT, "nr_${date}_$ENGINE");   #file for LOAD DATA INFILE
+	if (-p $load_file) {
+		unlink $load_file and $log->trace( "Action: named pipe $load_file removed!" );
+	}
+	#make named pipe
+	mkfifo( $load_file, 0666 ) or $log->logdie( "mkfifo $load_file failed: $!" );
+
+	#start 2 processes (one for Perl-child and MySQL-parent)
+    my $pid = fork;
+
+	if (!defined $pid) {
+		$log->logdie( "Cannot fork: $!" );
+	}
+
+	elsif ($pid == 0) {
+		# Child-client process
+		$log->warn( "Perl-child-client starting..." );
+
+		#open named pipe for writing (gziped file --> named pipe)
+		open my $nr_wr_fh, "+<:encoding(ASCII)", $load_file or die $!;   #+< mode=read and write
+		
+		#define new block for reading blocks of fasta
+		{
+			local $/ = ">gi";  #look in larger chunks between >gi (solo > found in header so can't use)
+			local $.;          #gzip count
+			my $out_cnt = 0;   #named pipe count
+			#print to named pipe
+			PIPE:
+			while (<$nr_fh>) {
+				chomp;
+				#print $nr_wr_fh "$_";
+				#say '{', $_, '}';
+				next PIPE if $_ eq '';   #first iteration is empty?
+				
+				#each fasta can be multispecies with multiple gi
+				#first get entire header + fasta
+				my ($header_long, $fasta) = $_ =~ m{\A([^\n].+?)\n(.+)\z}sx;
+				#remove illegal chars from fasta and upercase it
+			    $fasta =~ s/\R//g;  #delete multiple newlines (all vertical and horizontal space)
+				$fasta =~ tr/[+*-._]//;
+				$fasta =~ s/\d+//;
+				$fasta = uc $fasta;
+				$header_long =~ s/\|\|/\|/g;
+				$header_long = 'gi' . $header_long;   #gi removed as record separator (return it back)
+
+				#split on Ctrl-A
+				my @headers = split("\cA", $header_long);
+				#say '{', join("}\n{", @headers), '}';
+				
+				#print redundant copies of fasta for each unique gi
+				foreach my $header (@headers) {
+					my ($gi) = $header =~ m{gi\|(\d+)\|}x;    
+
+					#say 'GI:{', $gi, '}';
+
+					print {$nr_wr_fh} "$gi\t$fasta\n";
+					$out_cnt++;
+				}
+
+				#progress tracker
+				if ($. % 1000000 == 0) {
+					$log->trace( "$. lines processed!" );
+				}
+			}
+			my $nr_file_line_cnt = $. - 1;   #first line read empty (don't know why)
+			$log->warn( "File $INFILE has $nr_file_line_cnt lines!" );
+			$log->warn( "File $load_file written with $out_cnt lines!" );
+		}   #END block writing to pipe
+
+		$log->warn( "Perl-child-client terminating :)" );
+		exit 0;
+	}
+	else {
+		# MySQL-parent process
+		$log->warn( "MySQL-parent process, waiting for child..." );
+		
+		#SECOND PART:Loading file into db
+		my $DATABASE = $param_href->{DATABASE}    or $log->logcroak( 'no $DATABASE specified on command line!' );
+		
+		#get new handle
+    	my $dbh = dbi_connect($param_href);
+
+		my $table = path($load_file)->basename;
+
+    	#report what are you doing
+    	$log->info( "---------->Importing NCBI $table" );
+    	my $create_query = sprintf( qq{
+    	CREATE TABLE %s (
+    	gi INT UNSIGNED NOT NULL,
+    	fasta MEDIUMTEXT NOT NULL,
+    	PRIMARY KEY(gi)
+    	)ENGINE=$ENGINE CHARSET=ascii }, $dbh->quote_identifier($table) );
+		say $create_query;
+		create_table( { TABLE_NAME => $table, DBH => $dbh, QUERY => $create_query, %{$param_href} } );
+
+		#import table
+    	my $load_query = qq{
+    	LOAD DATA INFILE '$load_file'
+    	INTO TABLE $table } . q{ FIELDS TERMINATED BY '\t'
+    	LINES TERMINATED BY '\n'
+    	};
+    	eval { $dbh->do( $load_query, { async => 1 } ) };
+
+    	#check status while running LOAD DATA INFILE
+    	{    
+    	    my $dbh_check         = dbi_connect($param_href);
+    	    until ( $dbh->mysql_async_ready ) {
+				my $processlist_query = qq{
+					SELECT TIME, STATE FROM INFORMATION_SCHEMA.PROCESSLIST
+					WHERE DB = ? AND INFO LIKE 'LOAD DATA INFILE%';
+					};
+    	        my $sth = $dbh_check->prepare($processlist_query);
+    	        $sth->execute($DATABASE);
+    	        my ( $time, $state );
+    	        $sth->bind_columns( \( $time, $state ) );
+    	        while ( $sth->fetchrow_arrayref ) {
+    	            my $process = sprintf( "Time running:%0.3f sec\tSTATE:%s\n", $time, $state );
+    	            $log->trace( $process );
+    	            sleep 10;
+    	        }
+    	    }
+    	}    #end check LOAD DATA INFILE
+    	my $rows = $dbh->mysql_async_result;
+    	$log->trace( "Report: import inserted $rows rows!" );
+
+    	#report success or failure
+    	$log->debug( "Report: loading $table failed: $@" ) if $@;
+    	$log->debug( "Report: table $table loaded successfully!" ) unless $@;
+
+		$dbh->disconnect;
+
+		#communicate with child process
+		waitpid $pid, 0;
+	}
+	$log->warn( "MySQL-parent process after child has finished" );
+	unlink $load_file and $log->trace( "Named pipe $load_file removed!" );
+
+	return;
+}
+
+### INTERFACE SUB ###
+# Usage      : extract_and_load_gi_taxid( $param_href );
+# Purpose    : extracts NCBI gi_taxid_prot.dmp.gz file and LOADs it into MySQL database
+# Returns    : nothing
+# Parameters : ( $param_href )
+# Throws     : croaks for parameters
+# Comments   : it works on Linux only because it uses Linux named pipes
+#            : it runs fork: Perl is child, MySQL parent
+# See Also   : it uses https://metacpan.org/pod/PerlIO::gzip to open gziped file without decompressing it
+sub extract_and_load_gi_taxid {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak( 'extract_and_load_gi_taxid() needs a $param_href' ) unless @_ == 1;
+    my ( $param_href ) = @_;
+
+	my $OUT         = $param_href->{OUT}         or $log->logcroak( 'no $OUT specified on command line!' );
+	my $INFILE      = $param_href->{INFILE}      or $log->logcroak( 'no $INFILE specified on command line!' );
+	my $ENGINE      = $param_href->{ENGINE}      or $log->logcroak( 'no $ENGINE specified on command line!' );
+
+	#open gziped file without decompressing it
+	open my $nr_fh, "<:gzip", $INFILE or $log->logdie( "Can't open gzipped file $INFILE: $!" );
+
+	my $load_file = path($OUT, path($INFILE)->basename . "_$ENGINE");   #file for LOAD DATA INFILE
+	$load_file =~ s/\.dmp\.gz//g;
+	$load_file =~ s/\./_/g;
+	#make named pipe
+	mkfifo( $load_file, 0666 ) or $log->logdie( "mkfifo $load_file failed: $!" );
+
+	#start 2 processes (one for Perl-child and second for Mysql-parent)
+    my $pid = fork;
+
+	if (!defined $pid) {
+		$log->logdie( "Cannot fork: $!" );
+	}
+
+	elsif ($pid == 0) {
+		# Child-client process
+		$log->warn( "Perl-child-client starting..." );
+
+		#open named pipe for writing (gziped file --> named pipe)
+		open my $nr_wr_fh, "+<:encoding(ASCII)", $load_file or $log->logdie( "Can't open named pipe $load_file for Perl writing:$!" );   #+< mode=read and write
+		
+		#define new block for reading blocks of fasta
+		{
+			local $.;          #gzip count
+			my $out_cnt = 0;   #named pipe count
+			#print to named pipe
+			PIPE:
+			while (<$nr_fh>) {
+				chomp;
+				next PIPE if $_ eq '';   #first iteration is empty?
+				
+				print $nr_wr_fh "$_\n";
+				$out_cnt++;
+				
+				#progress tracker
+				if ($. % 1000000 == 0) {
+					$log->trace( "$. lines processed!" );
+				}
+			}
+			my $input_file_line_cnt = $.;
+			$log->debug( "File $INFILE has $input_file_line_cnt lines!" );
+			$log->debug( "File $load_file written with $out_cnt lines!" );
+		}   #END block writing to pipe
+
+		#keep child process alive for short files
+        sleep 10;
+		$log->warn( "Perl-child-client terminating :)" );
+		exit 0;
+	}
+	else {
+		# MySQL-parent process
+		$log->warn( "MySQL-parent process, waiting for child..." );
+		
+		#SECOND PART:Loading file into db
+		my $DATABASE = $param_href->{DATABASE}    or $log->logcroak( 'no $DATABASE specified on command line!' );
+		
+		#get new handle
+    	my $dbh = dbi_connect($param_href);
+
+		my $table = path($load_file)->basename;
+
+    	#report what are you doing
+    	$log->info( "---------->Importing NCBI $table" );
+
+    	#create table
+    	my $create_query = sprintf( qq{
+    	CREATE TABLE $table (
+    	gi INT UNSIGNED NOT NULL,
+    	ti INT UNSIGNED NOT NULL,
+    	PRIMARY KEY(gi),
+		KEY(ti)
+    	)ENGINE=$ENGINE CHARSET=ascii }, $dbh->quote_identifier($table) );
+		create_table( { TABLE_NAME => $table, DBH => $dbh, QUERY => $create_query, %{$param_href} } );
+		say $create_query;
+
+		#import table
+    	my $load_query = qq{
+    	LOAD DATA INFILE '$load_file'
+    	INTO TABLE $table } . q{ FIELDS TERMINATED BY '\t'
+    	LINES TERMINATED BY '\n'
+    	};
+    	eval { $dbh->do( $load_query, { async => 1 } ) };
+
+    	#check status while running LOAD DATA INFILE
+    	{    
+    	    my $dbh_check         = dbi_connect($param_href);
+    	    until ( $dbh->mysql_async_ready ) {
+				my $processlist_query = qq{
+					SELECT TIME, STATE FROM INFORMATION_SCHEMA.PROCESSLIST
+					WHERE DB = ? AND INFO LIKE 'LOAD DATA INFILE%';
+					};
+    	        my $sth = $dbh_check->prepare($processlist_query);
+    	        $sth->execute($DATABASE);
+    	        my ( $time, $state );
+    	        $sth->bind_columns( \( $time, $state ) );
+    	        while ( $sth->fetchrow_arrayref ) {
+    	            my $process = sprintf( "Time running:%0.3f sec\tSTATE:%s\n", $time, $state );
+    	            $log->trace( $process );
+    	            sleep 10;
+    	        }
+    	    }
+    	}    #end check LOAD DATA INFILE
+    	my $rows = $dbh->mysql_async_result;
+    	$log->trace( "Report: import inserted $rows rows!" );
+
+    	#report success or failure
+    	$log->debug( "Report: loading $table failed: $@" ) if $@;
+    	$log->debug( "Report: table $table loaded successfully!" ) unless $@;
+
+		$dbh->disconnect;
+
+		#communicate with child process
+		waitpid $pid, 0;
+	}
+	$log->warn( "MySQL-parent process after child has finished" );
+	unlink $load_file and $log->trace( "Named pipe $load_file removed!" );
+
+	return;
+}
 
 
+### INTERFACE SUB ###
+# Usage      : ti_gi_fasta( $param_href );
+# Purpose    : JOINs gi/fasta from nr database and gi/taxid from gi_taxid_prot.dmp
+# Returns    : nothing
+# Parameters : ( $param_href )
+# Throws     : croaks for parameters
+# Comments   : 
+# See Also   : 
+sub ti_gi_fasta {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak( 'ti_gi_fasta() needs a $param_href' ) unless @_ == 1;
+    my ( $param_href ) = @_;
 
+	my $DATABASE = $param_href->{DATABASE}    or $log->logcroak( 'no $DATABASE specified on command line!' );
+	my $ENGINE   = $param_href->{ENGINE}      or $log->logcroak( 'no $ENGINE specified on command line!' );
+			
+	#get new handle
+    my $dbh = dbi_connect($param_href);
 
+	#first prompt to select nr table
+    my $select_tables = qq{
+    SELECT TABLE_NAME 
+    FROM INFORMATION_SCHEMA.TABLES
+    WHERE TABLE_SCHEMA = '$DATABASE'
+    };
+    my @tables = map { $_->[0] } @{ $dbh->selectall_arrayref($select_tables) };
 
+    #ask to choose nr
+    my $table_nr= prompt 'Choose which nr table you want to use ',
+      -menu => [ @tables ],
+	  -number,
+      '>';
+    $log->trace( "Report: using NR: $table_nr" );
+
+    #ask to choose gi_taxid
+    my $table_gi_taxid= prompt 'Choose which gi_taxid_prot.dmp table you want to use ',
+      -menu => [ @tables ],
+	  -number,
+      '>';
+    $log->trace( "Report: using GI_TAXID: $table_gi_taxid" );
+
+    #report what are you doing
+    $log->info( "---------->JOIN-ing two tables: $table_nr and $table_gi_taxid" );
+
+    #drop table that is product of JOIN
+	my $table_base = "nr_ti_gi_fasta_$ENGINE";
+    my $create_query = sprintf( qq{
+    CREATE TABLE %s (
+    ti INT UNSIGNED NOT NULL,
+    gi INT UNSIGNED NOT NULL,
+	fasta MEDIUMTEXT NOT NULL,
+    PRIMARY KEY(ti, gi)
+    )ENGINE=$ENGINE CHARSET=ascii }, $dbh->quote_identifier($table_base) );
+	create_table( { TABLE_NAME => $table_base, DBH => $dbh, QUERY => $create_query, %{$param_href} } );
+
+    my $insert_query = qq{
+    INSERT INTO $table_base (ti, gi, fasta)
+    SELECT gt.ti, nr.gi, nr.fasta
+    FROM $table_nr AS nr
+    INNER JOIN $table_gi_taxid AS gt ON nr.gi = gt.gi
+    };
+    eval { $dbh->do($insert_query, { async => 1 } ) };
+
+    #check status while running
+    {    
+        my $dbh_check         = dbi_connect($param_href);
+        until ( $dbh->mysql_async_ready ) {
+			my $processlist_query = qq{
+				SELECT TIME, STATE FROM INFORMATION_SCHEMA.PROCESSLIST
+				WHERE DB = ? AND INFO LIKE 'INSERT%';
+				};
+            my $sth = $dbh_check->prepare($processlist_query);
+            $sth->execute($DATABASE);
+            my ( $time, $state );
+            $sth->bind_columns( \( $time, $state ) );
+            while ( $sth->fetchrow_arrayref ) {
+                my $process = sprintf( "Time running:%0.3f sec\tSTATE:%s\n", $time, $state );
+                $log->trace( $process );
+                sleep 10;
+            }
+        }
+    }    #end check
+    my $rows = $dbh->mysql_async_result;
+    $log->trace( "Report: import inserted $rows rows!" );
+
+    #report success or failure
+    $log->debug( "Report: loading $table_base failed: $@" ) if $@;
+    $log->debug( "Report: table $table_base loaded successfully!" ) unless $@;
+
+	$dbh->disconnect;
+
+	return;
+}
 
 
 
@@ -1006,26 +1440,30 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
 
 =head1 SYNOPSIS
 
+ Part I -> download genomes from Ensembl:
+
  perl ./lib/CollectGenomes.pm --mode=create_db -i . -ho localhost -d nr -p msandbox -u msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
  perl ./lib/CollectGenomes.pm --mode=ensembl_ftp --out=./ensembl_ftp/ -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
  perl ./lib/CollectGenomes.pm --mode=ensembl_vertebrates --out=./ensembl_vertebrates/ -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
+ Part II -> download genomes from NCBI:
+
+ perl ./lib/CollectGenomes.pm --mode=nr_ftp -o ./nr -rh ftp.ncbi.nih.gov -rd /blast/db/FASTA/ -rf nr.gz
+
+ perl ./lib/CollectGenomes.pm --mode=nr_ftp -o ./nr -rh ftp.ncbi.nih.gov -rd /pub/taxonomy/ -rf gi_taxid_prot.dmp.gz
+
+ perl ./lib/CollectGenomes.pm --mode=nr_ftp -o ./nr -rh ftp.ncbi.nih.gov -rd /pub/taxonomy/ -rf taxdump.tar.gz
+
+ Part III -> load nr into database
+
+ perl ./lib/CollectGenomes.pm --mode=extract_and_load_nr -if ./nr/nr_10k.gz -o ./nr/ -ho localhost -u msandbox -p msandbox -d nr --port=5625 --socket=/tmp/mysql_sandbox5625.sock --engine=InnoDB
+
+ perl ./lib/CollectGenomes.pm --mode=gi_taxid -if ./nr/gi_taxid_prot.dmp.gz -o ./nr/ -ho localhost -u msandbox -p msandbox -d nr --port=5625 --socket=/tmp/mysql_sandbox5625.sock --engine=InnoDB
 
 
 
-
- C:\workdir_doma\collect_genomes_to_database\bin>perl CollectGenomes.pm --mode=ftp_robust -o . -rh ftp.ncbi.nih.gov -rd /blast/db/FASTA/ -rf nr.gz
- C:\workdir_doma\collect_genomes_to_database\bin>perl CollectGenomes.pm --mode=ftp_robust -o . -rd /pub/taxonomy/ -rf gi_taxid_prot.dmp.gz
- C:\workdir_doma\collect_genomes_to_database\bin>perl CollectGenomes.pm --mode=ftp_robust -o . -rd /blast/db/FASTA/ -rf nr.gz
- C:\workdir_doma\collect_genomes_to_database\bin>perl CollectGenomes.pm --mode=ftp_robust -o . -rd /pub/taxonomy/ -rf taxdump.tar.gz
-
- NOT USED:perl ./bin/CollectGenomes.pm --mode=extract_nr -i /home/msestak/db_new/nr_19_06_2015/nr.gz -o /home/msestak/db_new/nr_19_06_2015/
-
- perl ./bin/CollectGenomes.pm --mode=extract_and_load_nr -i /home/msestak/db_new/nr_19_06_2015/nr.gz -o /home/msestak/db_new/nr_19_06_2015/ -ho localhost -u msandbox -p msandbox -d nr --port=5622 --socket=/tmp/mysql_sandbox5622.sock --engine=TokuDB
-
- perl ./bin/CollectGenomes.pm --mode=gi_taxid -i ./t/gi_taxid_prot1000.gz -o /home/msestak/db_new/nr_19_06_2015/ -ho localhost -u msandbox -p msandbox -d nr --port=5622 --socket=/tmp/mysql_sandbox5622.sock --engine=Deep
 
  perl ./bin/CollectGenomes.pm --mode=ti_gi_fasta  -o . -d nr -ho localhost -u msandbox -p msandbox --port=5624 --socket=/tmp/mysql_sandbox5624.sock --engine=Deep
 
@@ -1050,9 +1488,6 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
 
  perl ./bin/CollectGenomes.pm --mode=copy_existing_genomes --in=/home/msestak/dropbox/Databases/db_29_07_15/data/eukarya_old/  --out=/home/msestak/dropbox/Databases/db_29_07_15/data/eukarya/ -ho localhost -d nr -u msandbox -p msandbox -po 5622 -s /tmp/mysql_sandbox5622.sock
 
- perl ./lib/CollectGenomes.pm --mode=ensembl_vertebrates --out=./ensembl_ftp/ -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
-
- perl ./bin/CollectGenomes.pm --mode=ensembl_ftp --out=./data_in/ftp_ensembl/ -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
  perl ./bin/CollectGenomes.pm --mode=prepare_cdhit_per_phylostrata --in=./data_in/t_eukarya/ --out=./data_out/ -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
  perl ./bin/CollectGenomes.pm --mode=prepare_cdhit_per_phylostrata --in=/home/msestak/dropbox/Databases/db_29_07_15/data/archaea/ --out=/home/msestak/dropbox/Databases/db_29_07_15/data/cdhit/ -ho localhost -d nr -u msandbox -p msandbox -po 5622 -s /tmp/mysql_sandbox5622.sock
@@ -1099,7 +1534,7 @@ For help write:
 
 =head1 LICENSE
 
-Copyright (C) mocnii Martin Sebastijan Šestak
+Copyright (C) MOCNII Martin Sebastijan Šestak
 
 This library is free software; you can redistribute it and/or modify
 it under the same terms as Perl itself.

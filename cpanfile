@@ -31,6 +31,7 @@ requires 'File::Find::Rule';
 requires 'FindBin';
 requires 'HTML::TreeBuilder';
 requires 'LWP::Simple';
+requires 'DateTime::Tiny';
 
 
 author_requires 'Regexp::Debugger';
