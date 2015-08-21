@@ -7,22 +7,13 @@ use FindBin;
 use Log::Log4perl;
 use Test::Log::Log4perl;
 use Test::More;
-use CollectGenomes ('init_logging');
+use CollectGenomes ('init_logging', 'dbi_connect');
 
 my $module = 'CollectGenomes';
 my @subs = qw( create_database create_table dbi_connect import_names );
 
-use_ok( $module, @subs);
 
-#SETUP TEST SERVER BEFORE (DROP DATABASE deletes all)
-#needed to init logging
-init_logging();
-
-# get the loggers
-my $log  = Log::Log4perl->get_logger("main");
-my $tlog = Test::Log::Log4perl->get_logger("main");
-
-#testing create_database() log mesages
+#check for MySQL in sandbox
 my $param_href = {
           'VERBOSE' => 1,
           'PORT' => 5624,
@@ -36,6 +27,23 @@ my $param_href = {
                     ],
           'CHARSET' => 'ascii',
         };
+#my $test_dbh = dbi_connect($param_href);
+eval { my $test_dbh = dbi_connect($param_href); };
+if ($@) { plan skip_all => 'Test requires running sandbox on port 5624'; }
+
+#compile test
+use_ok( $module, @subs);
+
+#SETUP TEST SERVER BEFORE (DROP DATABASE deletes all)
+#needed to init logging
+init_logging();
+
+
+# get the loggers
+my $log  = Log::Log4perl->get_logger("main");
+my $tlog = Test::Log::Log4perl->get_logger("main");
+
+#testing create_database() log mesages
 Test::Log::Log4perl->start();
 $tlog->trace(qr/Report: connected to DBI:/);
 $tlog->info(qr/nr database creation with CHARSET ascii/);
@@ -69,14 +77,6 @@ $tlog->info(qr/Report: import inserted/);
 $tlog->debug(qr/Report: table.+?loaded successfully!/);
 import_names($param_href);
 Test::Log::Log4perl->end(qq|Report: sub import_names() logging works|);
-
-
-
-
-
-
-
-
 
 done_testing();
 
