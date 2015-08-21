@@ -60,7 +60,7 @@ $param_href = {
           'HOST' => 'localhost',
           'PASSWORD' => 'msandbox'
         };
-$param_href->{INFILE} = "$FindBin::Bin/../nr/names_martin7";
+$param_href->{INFILE} = "$FindBin::Bin/nr/names_martin7";
 Test::Log::Log4perl->start(ignore_priority => "trace" );   #variable number of trace messages imposible to test
 $tlog->info(qr/---------->Importing names/);
 $tlog->info(qr/Action.+?dropped successfully!/);
