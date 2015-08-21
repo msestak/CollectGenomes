@@ -45,6 +45,12 @@ our @EXPORT_OK = qw{
 	get_existing_ti
 	import_names
 	import_nodes
+	run_mysqldump
+	fn_create_tree
+	fn_retrieve_phylogeny
+	prompt_fn_retrieve
+	proc_create_phylo
+	call_proc_phylo
     get_missing_genomes
 	delete_extra_genomes
 	delete_full_genomes
@@ -116,6 +122,7 @@ sub main {
         import_names                  => \&import_names,
         import_nodes                  => \&import_nodes,
         ti_gi_fasta                   => \&ti_gi_fasta,
+        mysqldump                     => \&run_mysqldump,
         fn_tree                       => \&fn_create_tree,
         fn_retrieve                   => \&fn_retrieve_phylogeny,
         prompt_ph                     => \&prompt_fn_retrieve,
@@ -2161,6 +2168,67 @@ sub call_proc_phylo {
     return;
 }
 
+### INTERFACE SUB ###
+# Usage      : run_mysqldump( $param_href );
+# Purpose    : runs mysqldump from perl
+# Returns    : nothing
+# Parameters : ( $param_href)
+# Throws     : croaks for parameters
+# Comments   : run at end of procedure
+# See Also   :
+sub run_mysqldump {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('run_mysqldump() needs a hash_ref') unless @_ == 1;
+    my ($param_href) = @_;
+
+    my $OUT      = $param_href->{OUT}      or $log->logcroak('no $OUT specified on command line!');
+    my $DATABASE = $param_href->{DATABASE} or $log->logcroak('no $DATABASE specified on command line!');
+    my $USER     = $param_href->{USER}     or $log->logcroak('no $USER specified on command line!');
+    my $PASSWORD = $param_href->{PASSWORD} or $log->logcroak('no $PASSWORD specified on command line!');
+    my $PORT     = $param_href->{PORT}     or $log->logcroak('no $PORT specified on command line!');
+    my $SOCKET   = $param_href->{SOCKET}   or $log->logcroak('no $SOCKET specified on command line!');
+
+    #get date for backup
+    my $now  = DateTime::Tiny->now;
+    my $date = $now->year . '_' . $now->month . '_' . $now->day;
+
+    #my $datetime if doing more than one backup per hour
+    #  = $now->year . '_' . $now->month . '_' . $now->day . '_' . $now->hour . '_' . $now->minute . '_' . $now->second;
+
+    #get nice directory and name
+    my $target_dry = path( $OUT, $DATABASE . "_schema_$date.sql" );
+    my $target     = path( $OUT, $DATABASE . "_backup_$date.sql.gz" );
+    $log->debug("This is mysqldump schema dump:$target_dry");
+    $log->debug("This is mysqldump db file:$target");
+
+    #commands to run
+    my $cmd_dry = "mysqldump --socket=$SOCKET --port=$PORT -u $USER --password=$PASSWORD --databases $DATABASE ";
+    $cmd_dry .= "--single-transaction --routines --triggers --events --no-data ";
+    $cmd_dry .= "> $target_dry";
+    my $cmd = "time mysqldump --socket=$SOCKET --port=$PORT -u $USER --password=$PASSWORD --databases $DATABASE ";
+    $cmd .= "--single-transaction --routines --triggers --events ";
+    $cmd .= "| pigz -c -1 > $target";
+
+    #capture output of mysqldump command
+    my ( $stdout_dry, $stderr_dry, $exit_dry ) = capture_output( $cmd_dry, $param_href );
+    if ( $exit_dry == 0 ) {
+        $log->info("Action: database $DATABASE schema backup succeeded at $target_dry");
+    }
+    else {
+        $log->error("Action: database $DATABASE schema backup succeeded at $target_dry");
+    }
+
+    my ( $stdout, $stderr, $exit ) = capture_output( $cmd, $param_href );
+    if ( $exit == 0 ) {
+        $log->info("Action: database $DATABASE table backup succeeded at $target");
+    }
+    else {
+        $log->error("Action: database $DATABASE table backup succeeded at $target");
+    }
+
+    return;
+}
+
 
 
 
@@ -2193,7 +2261,7 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
 
  perl ./lib/CollectGenomes.pm --mode=nr_ftp -o ./nr -rh ftp.ncbi.nih.gov -rd /pub/taxonomy/ -rf taxdump.tar.gz
 
- Part III -> load nr into database
+ Part III -> load nr into database:
 
  perl ./lib/CollectGenomes.pm --mode=extract_and_load_nr -if ./nr/nr_10k.gz -o ./nr/ -ho localhost -u msandbox -p msandbox -d nr --port=5625 --socket=/tmp/mysql_sandbox5625.sock --engine=InnoDB
 
@@ -2208,13 +2276,7 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
  perl ./lib/CollectGenomes.pm --mode=import_nodes -if ./nr/nodes_martin7 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=InnoDB
 
  perl ./lib/CollectGenomes.pm -mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_martin7 -t 2759 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
-
-
-
- perl blastdb_analysis.pl -mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_martin7 -t 9606 -org hs -h localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
- or
- perl blastdb_analysis.pl -mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo -no nodes_martin7 -t 9606 -org hs -h localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
- perl blastdb_analysis.pl -mode=call_phylo -no nodes_martin7 -t 2759 -org eu --proc=proc_create_phylo16278 -h localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ perl ./lib/CollectGenomes.pm -mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_martin7 -t 7955 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v --engine=InnoDB
 
  Part V -> get genomes from nr base:
 
