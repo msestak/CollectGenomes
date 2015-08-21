@@ -113,10 +113,15 @@ sub main {
         load_nr                       => \&load_nr,
         extract_and_load_nr           => \&extract_and_load_nr,
         gi_taxid                      => \&extract_and_load_gi_taxid,
-        ti_gi_fasta                   => \&ti_gi_fasta,
-        get_existing_ti               => \&get_existing_ti,
         import_names                  => \&import_names,
         import_nodes                  => \&import_nodes,
+        ti_gi_fasta                   => \&ti_gi_fasta,
+        fn_tree                       => \&fn_create_tree,
+        fn_retrieve                   => \&fn_retrieve_phylogeny,
+        prompt_ph                     => \&prompt_fn_retrieve,
+        proc_phylo                    => \&proc_create_phylo,
+        call_phylo                    => \&call_proc_phylo,
+        get_existing_ti               => \&get_existing_ti,
         get_missing_genomes           => \&get_missing_genomes,
         delete_extra_genomes          => \&delete_extra_genomes,
         delete_full_genomes           => \&delete_full_genomes,
@@ -1574,6 +1579,587 @@ sub import_nodes {
 }
 
 
+### INTERFACE SUB ###
+# Usage      : fn_create_tree( $param_href );
+# Purpose    : installs function fn_create_tree in database (and tree table)
+# Returns    : nothing
+# Parameters : ( $param_href)
+# Throws     : croaks for parameters
+# Comments   : first part in chain, can be ignored once installed
+# See Also   :
+sub fn_create_tree {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak( 'fn_create_tree() needs a hash_ref' ) unless @_ == 1;
+    my ($param_href) = @_;
+
+    my $dbh   = dbi_connect($param_href);
+    my $NODES = $param_href->{NODES} or $log->logcroak( 'no $NODES file specified on command line!' );
+    my $TAX_ID = $param_href->{TAX_ID} or $log->logcroak( 'no $TAX_ID specified on command line!' );
+
+    #Using TAX_ID to get unique table names
+    my $table    = "tree$TAX_ID";
+    my $function = "fn_create_$table";
+
+    my $create_table_query = sprintf( qq{
+    CREATE TABLE IF NOT EXISTS %s (
+    ti INT UNSIGNED NOT NULL,
+    tax_level TINYINT UNSIGNED NOT NULL,
+    INDEX USING HASH (ti)
+    )ENGINE=MEMORY }, $dbh->quote_identifier($table) );
+	create_table( { TABLE_NAME => $table, DBH => $dbh, QUERY => $create_table_query, %{$param_href} } );
+	$log->trace("Report: $create_table_query");
+
+    #drop unique fn_create_tree
+    my $drop_fn_query = qq{
+    DROP FUNCTION IF EXISTS $function
+    };
+    eval { $dbh->do($drop_fn_query) };
+    $log->error( "Action: dropping $function failed: $@" ) if $@;
+    $log->debug( "Action: function $function dropped successfully!" ) unless $@;
+
+    #create unique fn_create_tree function
+    #use $NODES from command line
+    my $create_fn_query = qq{
+    CREATE FUNCTION $function (var_ti INT) RETURNS INT
+        DETERMINISTIC
+        MODIFIES SQL DATA
+        
+    BEGIN
+        
+        DECLARE tax_level INT;
+        SET tax_level = 1;
+        -- insert the top level ti from outside variable(var_ti)
+        DELETE $table FROM $table;
+        INSERT INTO $table
+        SELECT ti, tax_level
+            FROM $NODES AS no
+            WHERE no.ti = var_ti;
+        -- Loop through sub-levels
+        WHILE ROW_COUNT() > 0
+            DO
+            SET tax_level = tax_level + 1;
+            -- insert the taxonomy levels under the parent
+            INSERT INTO $table
+            SELECT phylogeny.ti, tax_level
+                FROM $NODES AS family_node 
+                JOIN $NODES AS phylogeny ON family_node.ti = phylogeny.parent_ti
+                JOIN $table ON $table.ti = family_node.ti
+                WHERE $table.tax_level = tax_level - 1;
+        
+        END WHILE; 
+        
+        RETURN var_ti;
+         
+    END
+    };
+    eval { $dbh->do($create_fn_query) };
+    $log->error( "Action: creating $function failed: $@" ) if $@;
+    $log->debug( "Action: function $function created successfully!" ) unless $@;
+
+    $dbh->disconnect;
+
+    return;
+}
+
+### INTERFACE SUB ###
+# Usage      : fn_retrieve_phylogeny( $param_href );
+# Purpose    : installs function fn_retrieve_phylogeny in database
+# Returns    : nothing
+# Parameters : ( $param_href)
+# Throws     : croaks for parameters
+# Comments   : second function in chain, can be ignored once installed
+# See Also   :
+sub fn_retrieve_phylogeny {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('fn_retrieve_phylogeny() needs a hash_ref') unless @_ == 1;
+    my ($param_href) = @_;
+
+    my $dbh    = dbi_connect($param_href);
+    my $NODES  = $param_href->{NODES} or $log->logcroak('no $NODES file specified on command line!');
+    my $TAX_ID = $param_href->{TAX_ID} or $log->logcroak('no $TAX_ID file specified on command line!');
+    my $ENGINE = defined $param_href->{ENGINE} ? $param_href->{ENGINE} : 'InnoDB';
+    (my $names = $NODES) =~ s/\A(.)(?:.+?)_(.+)\z/$1ames_$2/;
+
+    #needed only once at start of entire procedure
+    $dbh->{AutoCommit} = 0;    # enable transactions, if possible
+    eval {
+        my $update_query = qq{
+        UPDATE $NODES
+        SET parent_ti = 100000000
+        WHERE ti = 1 AND parent_ti = 1
+        };
+        $dbh->do($update_query);
+        $dbh->commit;          # commit the changes if we get this far
+        $log->debug("Table $NODES updated successfully (SET parent_ti = 100000000 WHERE ti = 1 AND parent_ti = 1)");
+    };
+    if ($@) {
+        $log->logcarp("Transaction aborted because $@");
+
+        # now rollback to undo the incomplete changes
+        # but do it in an eval{} as it may also fail
+        eval { $dbh->rollback };
+
+        # add other application on-error-clean-up code here
+        if ($@) {
+            $log->logcarp("Updating $NODES failed! Transaction failed to commit and failed to rollback!");
+        }
+    }
+
+    #using $$ as process_id to get unique table_name
+    my $table           = "tree_fn_ret_ph$TAX_ID";
+    my $table_phylogeny = "retrieve_phylogeny$TAX_ID";
+    my $function        = "fn_retrieve_phylogeny$TAX_ID";
+
+    #back to AUTOCOMMIT mode, we don't need transactions anymore
+    $dbh->{AutoCommit} = 1;
+
+    #create unique tree table
+    my $create_table_query = qq{
+    CREATE TABLE IF NOT EXISTS $table (
+    ti INT UNSIGNED NOT NULL,
+    tax_level TINYINT UNSIGNED NOT NULL
+    )ENGINE=$ENGINE
+    };
+	create_table( { TABLE_NAME => $table, DBH => $dbh, QUERY => $create_table_query, %{$param_href} } );
+	$log->trace("Report: $create_table_query");
+
+    #create unique retrieve_phylogeny table
+    my $create_table_query_phylogeny = qq{
+    CREATE TABLE IF NOT EXISTS $table_phylogeny (
+    species_name VARCHAR(200) NOT NULL,
+    ti INT UNSIGNED NOT NULL,
+    parent_ti INT UNSIGNED NOT NULL,
+    tax_level TINYINT UNSIGNED NOT NULL,
+	PRIMARY KEY(tax_level),
+	UNIQUE KEY(ti)
+    )ENGINE=$ENGINE
+    };
+	create_table( { TABLE_NAME => $table_phylogeny, DBH => $dbh, QUERY => $create_table_query_phylogeny, %{$param_href} } );
+	$log->trace("Report: $create_table_query_phylogeny");
+
+    #drop unique fn_retrieve_phylogeny
+    my $drop_fn_query = qq{
+    DROP FUNCTION IF EXISTS $function
+    };
+    eval { $dbh->do($drop_fn_query) };
+    $log->error( "Action: dropping $function failed: $@" ) if $@;
+    $log->debug( "Action: function $function dropped successfully!" ) unless $@;
+
+    #create unique fn_retrieve_phylogeny function
+    #use $NODES from command line
+    my $create_fn_query = qq{
+    CREATE FUNCTION $function (var_ti INT) RETURNS INT
+        DETERMINISTIC
+        MODIFIES SQL DATA
+        
+    BEGIN
+        
+        DECLARE tax_level INT;
+        SET tax_level = 1;
+        -- insert the top level
+        DELETE $table FROM $table;
+        INSERT INTO $table
+        SELECT ti, tax_level
+            FROM $NODES AS nd
+            WHERE nd.ti = var_ti;
+        -- Loop through sub-levels
+        WHILE ROW_COUNT() > 0 
+            DO
+            SET tax_level = tax_level + 1;
+            -- insert the taxonomy levels under the parent
+            INSERT INTO $table
+            SELECT nd.parent_ti, tax_level
+                FROM $NODES AS nd
+                JOIN $table ON $table.ti = nd.ti
+                WHERE $table.tax_level = tax_level - 1;
+        
+        END WHILE; 
+        
+        DELETE $table FROM $table
+        WHERE ti = 100000000;
+        DELETE $table FROM $table
+        WHERE ti = 1; -- deletes the ps0
+        
+        DELETE $table_phylogeny FROM $table_phylogeny;
+        
+        INSERT INTO $table_phylogeny
+        SELECT GROUP_CONCAT(na.species_name), tree.ti, nd.parent_ti, tree.tax_level
+            FROM $table AS tree
+            INNER JOIN $NODES AS nd ON nd.ti = tree.ti
+            INNER JOIN $names AS na ON na.ti = tree.ti
+            GROUP BY tree.tax_level
+            ORDER BY tree.tax_level DESC;
+
+        RETURN var_ti;
+         
+    END
+    
+    
+    };
+    eval { $dbh->do($create_fn_query) };
+    $log->debug( "Creating $function failed: $@" ) if $@;
+    $log->debug( "Function $function created successfully!" ) unless $@;
+
+    $dbh->disconnect;
+
+    return;
+}
+
+### INTERFACE SUB ###
+# Usage      : prompt_fn_retrieve( $param_href );
+# Purpose    : prompt and modify retrieve_phylogeny table
+# Returns    : nothing
+# Parameters : ( $param_href)
+# Throws     : croaks for parameters
+# Comments   : testing sub
+# See Also   :
+sub prompt_fn_retrieve {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak( 'prompt_fn_retrieve() needs a hash_ref' ) unless @_ == 1;
+    my ($param_href) = @_;
+
+    my $dbh    = dbi_connect($param_href);
+    my $TAX_ID = $param_href->{TAX_ID} or $log->logcroak('no $TAX_ID file specified on command line!');
+
+    #using $$ as process_id to get unique table_name
+    my $table_ret       = "tree_fn_ret_ph$TAX_ID";
+    my $table_phylogeny = "retrieve_phylogeny$TAX_ID";
+    my $function        = "fn_retrieve_phylogeny$TAX_ID";
+
+    #test function on tax_id from command line
+    my $test_fn_retrieve_query = qq{
+    SELECT $function(?)
+    };
+    my $sth = $dbh->prepare($test_fn_retrieve_query);
+    eval { $sth->execute($TAX_ID); };
+
+    #uses format to extract multiple rowsets from procedures
+    do {
+        my ( $i, $colno );
+        $log->trace( "Rowset " . ++$i . "\n---------------------------------------\n" );
+        foreach $colno ( 0 .. $sth->{NUM_OF_FIELDS} - 1 ) {
+            $log->trace( $sth->{NAME}->[$colno] . "\t" );
+        }
+        my ( $field, @row );
+        while ( @row = $sth->fetchrow_array() ) {
+            foreach $field ( 0 .. $#row ) {
+                $log->trace( $row[$field] . "\t" );
+            }
+        }
+    } until ( !$sth->more_results );
+
+    $sth->finish;    #end of first check (calling function)
+    $log->error( "Action: query $test_fn_retrieve_query failed: $@" ) if $@;
+    $log->debug( "Action: testing $function succeeded!" ) unless $@;
+
+    #check: looking at retrieve_phylogeny table to see if anything there
+    my $test_ph_query = qq{
+    SELECT species_name, ti, parent_ti, tax_level 
+    FROM $table_phylogeny
+    };
+    my $sth2 = $dbh->prepare($test_ph_query);
+    eval { $sth2->execute; };
+
+    ### Print the header
+    $log->trace( "species_name                                                                        ti        parent_ti     tax_level" );
+    $log->trace( "==================================================================================  ========  ========== =========" );
+    while ( my ( $species_name, $ti, $parent_ti, $tax_level ) = $sth2->fetchrow_array() ) {
+        my $line = sprintf( "%-82s %9d %14d %9d\n", $species_name, $ti, $parent_ti, $tax_level );
+		$log->trace( $line );
+    }
+
+    $sth2->finish;    #end of check (checking table retrieve_phylogeny)
+    $log->error( "Action: query $test_ph_query failed: $@" ) if $@;
+    $log->debug( "Action: testing $table_phylogeny succeeded!" ) unless $@;
+
+    #ask to choose path (from another prompt of from list)
+    my $menu
+      = prompt
+      'Choose how to specify tax_ids to keep (a = from prompt, b = from csv list):', "\n",
+      'hs19:131567, 2759, 33154, 1452651, 33208, 6072, 33213, 33511, 7711, 1452661, 7742, 117571, 32523, 32524, 40674, 9347, 1437010, 314146, 9443', "\n",
+      'dm14:131567, 2759, 33154, 1452651, 33208, 6072, 33213, 33317, 6656, 197562, 33340, 33392, 7147, 7215',
+      -menu => [ 'prompt', 'list' ],
+      '>';
+    $log->debug( $menu );        # returns string 'list' or 'prompt'
+
+    my $tis;                     #tax_ids to send to server
+    if ( $menu eq 'prompt' ) {
+
+        #retrieve data from prompt
+        my @remaining_tis;
+        my $sth_prompt = $dbh->prepare($test_ph_query);
+        $sth_prompt->execute;
+        $log->trace( "species_name                                                                        ti        parent_ti     tax_level" );
+        $log->trace( "==================================================================================  ========  ========== ========= " );
+        while ( my ( $species_name, $ti, $parent_ti, $tax_level ) = $sth_prompt->fetchrow_array() ) {
+            my $line = sprintf( "%-82s %9d %14d %9d\n", $species_name, $ti, $parent_ti, $tax_level );
+			$log->trace( $line );
+            my $continue = prompt( "Delete? ", -yn1 );
+            $log->trace( "{$continue}" );
+            if ( $continue eq 'y' ) {
+                $log->trace( "$tax_level to delete" );
+            }
+            else {
+                push @remaining_tis, $ti;
+            }
+        }
+        $tis = join( ', ', @remaining_tis );            #csv format needed for IN clause in SQL query
+        $log->debug( $tis );
+        $sth_prompt->finish;
+    }
+    else {                                              #give a list here (csv format)
+        $tis = prompt('List of tis:');
+        $log->debug( $tis );
+    }
+
+    #delete tax_ids that are not wanted from retrieve_phylogeny table
+    my $delete_tis_query = qq{
+    DELETE $table_phylogeny FROM $table_phylogeny
+    WHERE ti NOT IN ($tis)
+    };
+    eval { $dbh->do($delete_tis_query); };
+    $log->error( "Action: query $delete_tis_query failed: $@" ) if $@;
+    $log->debug( "Action: table $table_phylogeny updated!" ) unless $@;
+
+    #check: looking at retrieve_phylogeny table to see if it is updated
+    my $sth_check = $dbh->prepare($test_ph_query);
+    eval { $sth_check->execute; };
+
+    ### Print the header
+    $log->trace( "species_name                                                                        ti        parent_ti  tax_level" );
+    $log->trace( "==================================================================================  ========  ========== =========" );
+    while ( my ( $species_name, $ti, $parent_ti, $tax_level ) = $sth_check->fetchrow_array() ) {
+        my $line = sprintf( "%-82s %9d %14d %9d\n", $species_name, $ti, $parent_ti, $tax_level );
+		$log->trace( $line );
+    }
+    $sth_check->finish;    #end of check (checking table retrieve_phylogeny)
+
+    #alter table to sort it from 1 tp ps_max
+	$dbh->{AutoCommit} = 0;    # enable transactions, if possible
+    eval {
+        my $drop_query = qq{
+        DROP TABLE IF EXISTS ${table_phylogeny}_new
+        };
+        $dbh->do($drop_query);
+		my $create_query = qq{
+		CREATE TABLE ${table_phylogeny}_new LIKE ${table_phylogeny}
+		};
+        $dbh->do($create_query);
+		my $alter_query = qq{
+		ALTER TABLE ${table_phylogeny}_new CHANGE COLUMN tax_level tax_level TINYINT NOT NULL AUTO_INCREMENT
+		};
+        $dbh->do($alter_query);
+
+		my $insert_query = qq{
+		INSERT INTO ${table_phylogeny}_new (species_name, ti, parent_ti)
+		SELECT species_name, ti, parent_ti FROM ${table_phylogeny}
+		ORDER BY tax_level DESC
+		};
+        $dbh->do($insert_query);
+		my $drop_query2 = qq{
+		DROP TABLE ${table_phylogeny}
+		};
+        $dbh->do($drop_query2);
+		my $rename_query = qq{
+		RENAME TABLE ${table_phylogeny}_new TO ${table_phylogeny}
+		};
+        $dbh->do($rename_query);
+
+        $dbh->commit;          # commit the changes if we get this far
+		$log->debug( "Table $table_phylogeny updated successfully!");
+    };
+    if ($@) {
+        $log->logcarp( "Action: transaction aborted because $@" );
+
+        # now rollback to undo the incomplete changes
+        # but do it in an eval{} as it may also fail
+        eval { $dbh->rollback };
+
+        # add other application on-error-clean-up code here
+        if ($@) {
+            $log->logcarp( "Action: updating $table_phylogeny failed! Transaction failed to commit and failed to rollback!" );
+        }
+    }
+
+	#return back to AutoCommit
+	$dbh->{AutoCommit} = 1;
+
+    #check2: looking at retrieve_phylogeny table to see if it is updated
+    my $sth_check2 = $dbh->prepare($test_ph_query);
+    eval { $sth_check2->execute; };
+
+    ### Print the header
+    $log->trace( "species_name                                                                        ti        parent_ti  tax_level" );
+    $log->trace( "==================================================================================  ========  ========== =========" );
+    while ( my ( $species_name, $ti, $parent_ti, $tax_level ) = $sth_check2->fetchrow_array() ) {
+        my $line = sprintf( "%-82s %9d %14d %9d\n", $species_name, $ti, $parent_ti, $tax_level );
+		$log->trace ( $line );
+    }
+    $sth_check2->finish;    #end of check2 (checking table retrieve_phylogeny)
+    $log->error( "Action: query $test_ph_query failed: $@" ) if $@;
+    $log->debug( "Action: fetching $table_phylogeny succeeded!" ) unless $@;
+
+    $dbh->disconnect;
+
+    return;
+}
+
+### INTERFACE SUB ###
+# Usage      : proc_create_phylo( $param_href );
+# Purpose    : installs function proc_create_phylo in database
+# Returns    : nothing
+# Parameters : ( $param_href)
+# Throws     : croaks for parameters
+# Comments   : need to be called together with create functions subs
+#            : because it depends on process id to find functions and tables
+# See Also   :
+sub proc_create_phylo {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak( 'proc_create_phylo() needs a hash_ref' ) unless @_ == 1;
+    my ($param_href) = @_;
+
+    my $dbh    = dbi_connect($param_href);
+    my $NODES  = $param_href->{NODES}  or $log->logcroak('no $NODES file specified on command line!');
+    my $TAX_ID = $param_href->{TAX_ID} or $log->logcroak('no $TAX_ID file specified on command line!');
+    my $ENGINE = defined $param_href->{ENGINE} ? $param_href->{ENGINE} : 'InnoDB';
+
+    #using process_id $$ to get unique table_name
+    my $table_phylo     = "phylo_${TAX_ID}";
+    my $procedure       = "proc_create_${table_phylo}";    #phylo table has $TAX_ID
+    my $table_tree      = "tree$TAX_ID";
+    my $table_phylogeny = "retrieve_phylogeny$TAX_ID";
+
+    #drop unique proc_create_phylo$TAX_ID
+    my $drop_proc_query = qq{
+    DROP PROCEDURE IF EXISTS $procedure
+    };
+    eval { $dbh->do($drop_proc_query) };
+    $log->error( "Action: dropping $procedure failed: $@" ) if $@;
+    $log->debug( "Action: procedure $procedure dropped successfully!" ) unless $@;
+
+    #create unique proc_create_phylo$$ procedure
+    #use $NODES from command line
+    my $create_proc_query = qq{
+    CREATE PROCEDURE $procedure (IN ext_var_taxid INT)
+
+    BEGIN
+        DECLARE done INT DEFAULT FALSE;
+        DECLARE var_ti INT UNSIGNED;
+        DECLARE cursor1 CURSOR FOR SELECT ti FROM $table_phylogeny ORDER BY tax_level ASC;
+        DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
+
+        DROP TABLE IF EXISTS $table_phylo;
+        CREATE TABLE IF NOT EXISTS $table_phylo (
+        id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+        PRIMARY KEY(id)
+        )ENGINE=$ENGINE DEFAULT CHARSET=ascii;
+
+        OPEN cursor1;
+        
+            SET \@num = 1;
+
+            read_loop: LOOP
+                FETCH cursor1 INTO var_ti;
+                IF done THEN
+                    LEAVE read_loop;
+                END IF;
+                IF var_ti IS NOT NULL THEN
+                    SELECT fn_create_$table_tree(var_ti);
+
+                    SET \@ti1 = CONCAT('ALTER TABLE $table_phylo ADD COLUMN ps', \@num, ' INT(11) UNSIGNED NULL');
+                    PREPARE stmt FROM \@ti1;
+                    EXECUTE stmt;
+                    DEALLOCATE PREPARE stmt;
+
+                    SET \@ti2 = CONCAT('INSERT INTO $table_phylo (ps', \@num, ') SELECT ti FROM $table_tree');
+                    PREPARE stmt FROM \@ti2;
+                    EXECUTE stmt;
+                    DEALLOCATE PREPARE stmt;
+
+                    SET \@ti3 = CONCAT('CREATE INDEX ps', \@num, '_index ON $table_phylo(ps', \@num, ')');
+                    PREPARE stmt FROM \@ti3;
+                    EXECUTE stmt;
+                    DEALLOCATE PREPARE stmt;
+
+                    IF \@num > 1 THEN 
+                        SET \@ti4 = CONCAT('DELETE lf FROM $table_phylo AS lf INNER JOIN $table_phylo AS rh ON lf.ps', \@num - 1, ' = rh.ps', \@num);
+                        PREPARE stmt FROM \@ti4;
+                        EXECUTE stmt;
+                        DEALLOCATE PREPARE stmt;
+                    END IF;
+
+                SET \@num = \@num + 1;
+
+                END IF;
+
+            END LOOP;
+
+        CLOSE cursor1;
+    END
+    };
+    eval { $dbh->do($create_proc_query) };
+    $log->error( "Action: creating $procedure failed: $@" ) if $@;
+    $log->debug( "Action: procedure $procedure created successfully!" ) unless $@;
+
+    $dbh->disconnect;
+
+    return;
+}
+
+### INTERFACE SUB ###
+# Usage      : call_proc_phylo( $param_href );
+# Purpose    : calls proc_create_phylo and creates phylo table
+# Returns    : nothing
+# Parameters : ( $param_href, $TAX_ID)
+# Throws     : croaks for parameters
+# Comments   : needs $TAX_ID from command line
+# See Also   :
+sub call_proc_phylo {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak( 'call_proc_phylo() needs a hash_ref' ) unless @_ == 1;
+    my ($param_href) = @_;
+
+    my $dbh    = dbi_connect($param_href);
+    my $TAX_ID = $param_href->{TAX_ID} or $log->logcroak( 'no $TAX_ID specified on command line!' );
+    my $NODES  = $param_href->{NODES}  or $log->logcroak( 'no $NODES specified on command line!' );
+
+    #using $TAX_ID to get unique proc name (when running in parallel with create subs)
+    #using proc name from command line when running solo
+    my $proc = defined $param_href->{PROC} ? $param_href->{PROC} : "proc_create_phylo_$TAX_ID";
+    $log->trace("Report: using procedure $proc!");
+    my $table_phylo = "phylo_$TAX_ID";
+    my $table_tree  = "tree$TAX_ID";
+    my $table_ret   = "tree_fn_ret_ph$TAX_ID";
+
+	#throws error: Commands out of sync; you can't run this command now
+	#without changes to $dbh
+	#$dbh->{mysql_use_result} = 1;
+	$dbh->{mysql_server_prepare} = 0;   #procedures don't work with server side prepare
+	my $dbh_trace = sprintf(Dumper tied %$dbh);
+	$log->trace("$dbh_trace");
+
+    #CALL proc_create_phylo$TAX_ID
+    my $call_proc_query = qq{
+    CALL $proc($TAX_ID);
+    };
+    eval { $dbh->do( $call_proc_query ) };
+    $log->error( "Action: executing $proc failed: $@" ) if $@;
+    $log->debug( "Action: procedure $proc executed successfully!" ) unless $@;
+
+	#clean tables
+	foreach my $table_name ($table_tree, $table_ret) {
+	    my $drop_query = sprintf( qq{
+	    DROP TABLE IF EXISTS %s
+	    }, $dbh->quote_identifier($table_name) );
+	    eval { $dbh->do($drop_query) };
+	    $log->error("Action: dropping $table_name failed: $@") if $@;
+	    $log->info("Action: $table_name dropped successfully!") unless $@;
+	}
+	
+	$dbh->disconnect;
+
+    return;
+}
 
 
 
@@ -1621,6 +2207,7 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
 
  perl ./lib/CollectGenomes.pm --mode=import_nodes -if ./nr/nodes_martin7 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=InnoDB
 
+ perl ./lib/CollectGenomes.pm -mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_martin7 -t 2759 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
 
 
@@ -1700,4 +2287,3 @@ it under the same terms as Perl itself.
 mocnii E<lt>msestak@irb.hrE<gt>
 
 =cut
-
