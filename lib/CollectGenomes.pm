@@ -36,6 +36,7 @@ our @EXPORT_OK = qw{
 	get_parameters_from_cmd
 	dbi_connect
 	create_database
+	create_table
 	capture_output
 	ftp_robust
 	extract_and_load_nr
@@ -96,6 +97,12 @@ sub main {
     my $PORT     = $param_href->{PORT};
     my $SOCKET   = $param_href->{SOCKET};
     my $TAX_ID   = $param_href->{TAX_ID};
+    my $VERBOSE  = $param_href->{VERBOSE};
+	
+    #get dump of param_href if -v (VERBOSE) flag is on (for debugging)
+    my $dump_print = sprintf( Dumper($param_href) ) if $VERBOSE;
+    $log->debug( '$param_href = ', "$dump_print" ) if $VERBOSE;
+
 
     #need to create dispatch table for different usage depending on mode requested
     #dispatch table is hash (could be also hash_ref)
@@ -1211,6 +1218,7 @@ sub extract_and_load_gi_taxid {
 	$load_file =~ s/\.dmp\.gz//g;
 	$load_file =~ s/\./_/g;
 	#make named pipe
+	if (-p $load_file) { unlink $load_file and $log->warn(qq|Action: named pipe $load_file deleted|); }
 	mkfifo( $load_file, 0666 ) or $log->logdie( "mkfifo $load_file failed: $!" );
 
 	#start 2 processes (one for Perl-child and second for Mysql-parent)
@@ -1459,7 +1467,7 @@ sub import_names {
     KEY(species_name)
     )ENGINE=$ENGINE CHARACTER SET=ascii }, $dbh->quote_identifier($table) );
 	create_table( { TABLE_NAME => $table, DBH => $dbh, QUERY => $create_query, %{$param_href} } );
-	say $create_query;
+	$log->trace("Report: $create_query");
 
     #import table
     my $load_query = qq{
@@ -1488,7 +1496,7 @@ sub import_names {
         }
     }
     my $rows = $dbh->mysql_async_result;
-    $log->trace( "Report: import inserted $rows rows!" );
+    $log->info( "Report: import inserted $rows rows!" );
 
     #report success or failure
     $log->error( "Report: loading $table failed: $@" ) if $@;

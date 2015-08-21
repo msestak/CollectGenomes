@@ -13,7 +13,7 @@ use CollectGenomes qw{
 	};
 
 my $module = 'CollectGenomes';
-my @subs = qw( main init_logging capture_output get_parameters_from_cmd dbi_connect create_database);
+my @subs = qw( main init_logging capture_output get_parameters_from_cmd);
 
 use_ok( $module, @subs);
 
