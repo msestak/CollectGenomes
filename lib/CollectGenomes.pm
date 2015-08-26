@@ -2453,13 +2453,12 @@ sub jgi_download {
 
 	#get xml files of large groups
 	my @jgi_zomes = qw(
-	http://genome.jgi.doe.gov/ext-api/downloads/get-directory?organism=Metazome
 	http://genome.jgi.doe.gov/ext-api/downloads/get-directory?organism=PhytozomeV10
-	http://genome.jgi-psf.org/ext-api/downloads/get-directory?organism=fungi
 	);
 	
 	# fungi on other site
 	# http://genome.jgi-psf.org/ext-api/downloads/get-directory?organism=fungi
+	# http://genome.jgi.doe.gov/ext-api/downloads/get-directory?organism=Metazome
 	
 	#curl downloads cookie to use later
 	save_cookie($param_href);
@@ -2476,14 +2475,14 @@ sub jgi_download {
 			
 			foreach my $folder_upper (@folders_upper) {
 				my $species_name = $folder_upper->att( 'name' );
-				say "{$species_name}";
+				say "FOLDER_UPPER-NAME:{$species_name}";
 			
 				my @folders= $folder_upper->children;
-				say "@folders";
+				say "LISTING FOLDERS:@folders";
 				
 				foreach my $folder (@folders) {
 					my @files = $folder->children;
-					say "@files";
+					say "LISTING FILES:@files";
 					foreach my $file (@files) {
 						my $filename = $file->att( 'filename' );
 						say "filename:$filename";
@@ -2703,15 +2702,18 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
 
  perl ./bin/CollectGenomes.pm --mode=copy_existing_genomes --in=/home/msestak/dropbox/Databases/db_29_07_15/data/eukarya_old/  --out=/home/msestak/dropbox/Databases/db_29_07_15/data/eukarya/ -ho localhost -d nr -u msandbox -p msandbox -po 5622 -s /tmp/mysql_sandbox5622.sock
 
+ Part VI -> download genomes from JGI:
 
- Part VI -> prepare and run cd-hit
+ perl ./lib/CollectGenomes.pm --mode=jgi_download -o ./xml/
+
+ Part VII -> prepare and run cd-hit
  perl ./bin/CollectGenomes.pm --mode=prepare_cdhit_per_phylostrata --in=./data_in/t_eukarya/ --out=./data_out/ -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
  perl ./bin/CollectGenomes.pm --mode=prepare_cdhit_per_phylostrata --in=/home/msestak/dropbox/Databases/db_29_07_15/data/archaea/ --out=/home/msestak/dropbox/Databases/db_29_07_15/data/cdhit/ -ho localhost -d nr -u msandbox -p msandbox -po 5622 -s /tmp/mysql_sandbox5622.sock
 
 
  perl ./bin/CollectGenomes.pm --mode=run_cdhit --in=/home/msestak/dropbox/Databases/db_29_07_15/data/cdhit/cd_hit_cmds --out=/home/msestak/dropbox/Databases/db_29_07_15/data/cdhit/ -ho localhost -d nr -u msandbox -p msandbox -po 5622 -s /tmp/mysql_sandbox5622.sock -v
 
- Part VII -> prepare BLAST and run it:
+ Part VIII -> prepare BLAST and run it:
 
 =head1 DESCRIPTION
 
