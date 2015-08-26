@@ -27,6 +27,7 @@ use File::Find::Rule;
 use HTML::TreeBuilder;
 use LWP::Simple;
 use DateTime::Tiny;
+use XML::Twig;
 
 our $VERSION = "0.01";
 
@@ -51,6 +52,7 @@ our @EXPORT_OK = qw{
 	prompt_fn_retrieve
 	proc_create_phylo
 	call_proc_phylo
+	jgi_download
     get_missing_genomes
 	delete_extra_genomes
 	delete_full_genomes
@@ -128,6 +130,7 @@ sub main {
         prompt_ph                     => \&prompt_fn_retrieve,
         proc_phylo                    => \&proc_create_phylo,
         call_phylo                    => \&call_proc_phylo,
+		jgi_download                  => \&jgi_download,
         get_existing_ti               => \&get_existing_ti,
         get_missing_genomes           => \&get_missing_genomes,
         delete_extra_genomes          => \&delete_extra_genomes,
@@ -2229,6 +2232,412 @@ sub run_mysqldump {
     return;
 }
 
+### INTERFACE SUB ###
+# Usage      : get_missing_genomes( $param_href );
+# Purpose    : JOINs existing tis with all possible tis from nr_base (ti, gi, fasta)
+# Returns    : nothing
+# Parameters : ( $param_href )
+# Throws     : croaks for parameters
+# Comments   : 
+# See Also   : 
+sub get_missing_genomes {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak( 'get_missing_genomes() needs a $param_href' ) unless @_ == 1;
+    my ( $param_href ) = @_;
+
+	my $DATABASE = $param_href->{DATABASE}    or $log->logcroak( 'no $DATABASE specified on command line!' );
+			
+	#get new handle
+    my $dbh = dbi_connect($param_href);
+
+	#first prompt to select nr_base table
+    my $select_tables = qq{
+    SELECT TABLE_NAME 
+    FROM INFORMATION_SCHEMA.TABLES
+    WHERE TABLE_SCHEMA = '$DATABASE'
+    };
+    #get nr_base NAMES to array to feed to prompt()
+    my @tables = map { $_->[0] } @{ $dbh->selectall_arrayref($select_tables) };
+	#$log->trace( 'Returned tables: {', join('}{', @tables), '}' );
+    
+    #ask to choose nr_base
+    my $table_nr_base = prompt 'Choose which nr_base table you want to use ',
+      -menu => [ @tables ],
+	  -number,
+      '>';
+    $log->trace( "Using: $table_nr_base" );
+
+    #ask to choose phylo_table
+    my $table_phylo = prompt 'Choose which phylo table you want to use ',
+      -menu => [ @tables ],
+	  -number,
+      '>';
+    $log->trace( "Using: $table_phylo" );
+
+	#ask to choose ti_files_table
+    my $table_ti_files= prompt 'Choose which ti_files table you want to use ',
+      -menu => [ @tables ],
+	  -number,
+      '>';
+    $log->trace( "Using: $table_ti_files" );
+
+	#ask to choose names_table
+    my $table_names = prompt 'Choose which names table you want to use ',
+      -menu => [ @tables ],
+	  -number,
+      '>';
+    $log->trace( "Using: $table_names" );
+
+
+    #report what are you doing
+    $log->info( "---------->JOIN-ing two tables: $table_nr_base and $table_phylo" );
+
+	#drop table that is product of JOIN
+	my $table_eu = "nr_base_eu$$";
+    my $drop_query = qq{
+    DROP TABLE IF EXISTS $table_eu
+    };
+    eval { $dbh->do($drop_query) };
+    $log->info("Dropping $table_eu failed: $@") if $@;
+    $log->info("Table $table_eu dropped successfully!") unless $@;
+
+    #create table
+    my $create_query = qq{
+    CREATE TABLE $table_eu (
+    ti INT UNSIGNED NOT NULL,
+    gi INT UNSIGNED NOT NULL,
+	fasta MEDIUMTEXT NOT NULL,
+    PRIMARY KEY(ti, gi)
+    )ENGINE=TokuDB CHARSET=ascii ROW_FORMAT=tokudb_zlib
+    };
+    eval { $dbh->do($create_query) };
+    $log->info( "Creating $table_eu failed: $@" ) if $@;
+    $log->info( "Table $table_eu created successfully!" ) unless $@;
+
+    my $insert_query = qq{
+    INSERT INTO $table_eu (ti, gi, fasta)
+    SELECT nr.ti, nr.gi, nr.fasta
+    FROM $table_nr_base AS nr
+    INNER JOIN $table_phylo AS ph ON ph.ps2 = nr.ti
+    };   #ps2 are eukaryotes
+    eval { $dbh->do($insert_query, { async => 1 } ) };
+
+    #check status while running
+    {    
+        my $dbh_check         = dbi_connect($param_href);
+        until ( $dbh->mysql_async_ready ) {
+            my $processlist_query = qq{
+            SELECT TIME_MS, STATE FROM INFORMATION_SCHEMA.PROCESSLIST
+            WHERE DB = ? AND INFO LIKE 'INSERT%';
+            };
+            my $sth = $dbh_check->prepare($processlist_query);
+            $sth->execute($DATABASE);
+            my ( $time_ms, $state );
+            $sth->bind_columns( \( $time_ms, $state ) );
+            while ( $sth->fetchrow_arrayref ) {
+                $time_ms = $time_ms / 1000;
+                my $process = sprintf( "Time running:%0.3f sec\tSTATE:%s\n", $time_ms, $state );
+                $log->trace( $process );
+                sleep 10;
+            }
+        }
+    }    #end check
+    my $rows = $dbh->mysql_async_result;
+    $log->trace( "Import inserted $rows rows!" );
+
+    $log->debug( "Loading $table_eu failed: $@" ) if $@;
+    $log->debug( "Table $table_eu loaded successfully!" ) unless $@;
+
+    #drop COUNT table (num of genes per ti)
+	my $table_eu_cnt = "nr_base_eu_cnt$$";
+    my $drop_query_cnt = qq{
+    DROP TABLE IF EXISTS $table_eu_cnt
+    };
+    eval { $dbh->do($drop_query_cnt) };
+    $log->info("Dropping $table_eu_cnt failed: $@") if $@;
+    $log->info("Table $table_eu_cnt dropped successfully!") unless $@;
+
+    #create table
+    my $create_query_cnt = qq{
+    CREATE TABLE $table_eu_cnt (
+    ti INT UNSIGNED NOT NULL,
+    genes_cnt INT UNSIGNED NOT NULL,
+	species_name VARCHAR(200) NULL,
+    PRIMARY KEY(ti),
+	KEY(genes_cnt),
+	KEY(species_name)
+    )ENGINE=TokuDB CHARSET=ascii ROW_FORMAT=tokudb_zlib
+    };
+    eval { $dbh->do($create_query_cnt) };
+    $log->info( "Creating $table_eu_cnt failed: $@" ) if $@;
+    $log->info( "Table $table_eu_cnt created successfully!" ) unless $@;
+
+	#INSERT all eukaryotes
+    my $insert_query_cnt = qq{
+    INSERT INTO $table_eu_cnt (ti, genes_cnt)
+    SELECT ti, COUNT(ti) AS genes_cnt
+    FROM $table_eu
+	GROUP BY ti
+    };
+    eval { $dbh->do($insert_query_cnt, { async => 1 } ) };
+	my $rows_cnt = $dbh->mysql_async_result;
+    $log->trace( "Import to $table_eu_cnt inserted $rows_cnt rows!" );
+
+    $log->debug( "Loading $table_eu_cnt failed: $@" ) if $@;
+    $log->debug( "Table $table_eu_cnt loaded successfully!" ) unless $@;
+	
+	#DELETE smaller than 5000 genes in genome
+	my $delete_query_cnt = qq{
+	DELETE nr FROM $table_eu_cnt AS nr
+	WHERE genes_cnt < 5000;
+    };
+    eval { $dbh->do($delete_query_cnt, { async => 1 } ) };
+	my $rows_cnt2 = $dbh->mysql_async_result;
+    $log->trace( "Table $table_eu_cnt deleted $rows_cnt2 rows!" );
+
+    $log->debug( "Deleting $table_eu_cnt failed: $@" ) if $@;
+    $log->debug( "Table $table_eu_cnt deleted successfully!" ) unless $@;
+
+	#DELETE genomes already present in database
+	my $delete_query_cnt2 = qq{
+	DELETE nr FROM $table_eu_cnt AS nr
+	INNER JOIN $table_ti_files AS ti
+	ON nr.ti = ti.ti
+    };
+    eval { $dbh->do($delete_query_cnt2, { async => 1 } ) };
+	my $rows_cnt_del2 = $dbh->mysql_async_result;
+    $log->trace( "Table $table_eu_cnt deleted $rows_cnt_del2 rows!" );
+
+    $log->debug( "Deleting $table_eu_cnt failed: $@" ) if $@;
+    $log->debug( "Table $table_eu_cnt deleted successfully!" ) unless $@;
+
+
+	#UPDATE with species_names
+    my $update_query_cnt = qq{
+	UPDATE $table_eu_cnt AS nr
+	SET nr.species_name = (SELECT DISTINCT na.species_name
+	FROM $table_names AS na WHERE nr.ti = na.ti);
+    };
+    eval { $dbh->do($update_query_cnt, { async => 1 } ) };
+	my $rows_cnt3 = $dbh->mysql_async_result;
+    $log->trace( "Update to $table_eu_cnt updated $rows_cnt3 rows!" );
+
+    $log->debug( "Updating $table_eu_cnt failed: $@" ) if $@;
+    $log->debug( "Table $table_eu_cnt updated successfully!" ) unless $@;
+
+	$dbh->disconnect;
+
+	return;
+}
+
+
+
+### INTERFACE SUB ###
+# Usage      : jgi_download( $param_href );
+# Purpose    : it downloads proteomes from JGI Metazome site
+# Returns    : nothing
+# Parameters : $param_href with $OUT
+# Throws     : 
+# Comments   : uses XML::Twig to parse XML file
+# See Also   : 
+sub jgi_download {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('jgi_download() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    my $OUT      = $param_href->{OUT}      or $log->logcroak('no $OUT specified on command line!');
+	#my $DATABASE = $param_href->{DATABASE} or $log->logcroak('no $DATABASE specified on command line!');
+
+    #get new handle
+	#my $dbh = dbi_connect($param_href);
+
+	#get xml files of large groups
+	my @jgi_zomes = qw(
+	http://genome.jgi.doe.gov/ext-api/downloads/get-directory?organism=Metazome
+	http://genome.jgi.doe.gov/ext-api/downloads/get-directory?organism=PhytozomeV10
+	http://genome.jgi-psf.org/ext-api/downloads/get-directory?organism=fungi
+	);
+	
+	# fungi on other site
+	# http://genome.jgi-psf.org/ext-api/downloads/get-directory?organism=fungi
+	
+	#curl downloads cookie to use later
+	save_cookie($param_href);
+
+
+	foreach my $zome (@jgi_zomes) {
+		my ($xml_name, $xml_path) = get_jgi_xml( { URL => $zome, %{$param_href} } );
+
+			my $twig= new XML::Twig(pretty_print => 'indented');
+			$twig->parsefile( $xml_path );    # build the twig
+			
+			my $root= $twig->root;					# get the root of the twig
+			my @folders_upper = $root->children;    # get the folders list
+			
+			foreach my $folder_upper (@folders_upper) {
+				my $species_name = $folder_upper->att( 'name' );
+				say "{$species_name}";
+			
+				my @folders= $folder_upper->children;
+				say "@folders";
+				
+				foreach my $folder (@folders) {
+					my @files = $folder->children;
+					say "@files";
+					foreach my $file (@files) {
+						my $filename = $file->att( 'filename' );
+						say "filename:$filename";
+						my $size = $file->att( 'size' );
+						say "size:$size";
+						my $url = $file->att( 'url' );
+						say "url:$url";
+						$url =~ s{/ext-api(?:.+?)url=(.+)}{$1};
+						say $url;
+						$url = 'http://genome.jgi.doe.gov' . $url;
+						say $url;
+		
+					}
+				}
+			}
+			sleep 5;
+
+	}
+
+
+
+    return;
+}
+
+
+
+
+### INTERNAL UTILITY ###
+# Usage      : save_cookie( $param_href );
+# Purpose    : downlods cookie from JGI
+# Returns    : nothing
+# Parameters : needs $OUT
+# Throws     : 
+# Comments   : needed for jgi_download()
+# See Also   : jgi_download()
+sub save_cookie_not_working {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('save_cookie() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    my $OUT      = $param_href->{OUT}      or $log->logcroak('no $OUT specified on command line!');
+
+	my $cookie_path = path($OUT, 'cookie_jgi');
+
+	use HTTP::Cookies;
+	my $cookie_jar = HTTP::Cookies->new(
+	   file     => $cookie_path,
+	   autosave => 1,
+	);
+	my $ua = LWP::UserAgent->new;
+	$ua->cookie_jar( $cookie_jar );
+
+	#setup request
+	my $url = 'https://signon.jgi.doe.gov/signon/create';
+	my $user = q{msestak@irb.hr};
+	my $pass = q{jgi_for_lifem8};
+	use HTTP::Request::Common qw(GET);
+	my $req = GET($url); 
+	$req->authorization_basic($user, $pass);
+	#$req->content('login_username='.$user.'&login_password='.$pass.'&action=login');
+	
+	#do it         
+	my $response = $ua->request($req);
+	sleep 3;
+	
+	if ($response->is_error()) {
+	    printf " %s\n", $response->status_line;
+		print "https request error!\n";
+	} 
+	else {
+	    my $content = $response->content();
+	    print $content;
+	}
+	
+	print $response->status_line;
+
+    return;
+}
+
+sub save_cookie {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('save_cookie() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    my $OUT      = $param_href->{OUT}      or $log->logcroak('no $OUT specified on command line!');
+
+	my $cookie_path = path($OUT, 'cookie_jgi');
+
+	#setup request
+	my $url = q{https://signon.jgi.doe.gov/signon/create};
+	my $user = q{msestak@irb.hr};
+	my $pass = q{jgi_for_lifem8};
+
+	my $cmd = qq{curl $url --data-ascii "login=$user&password=$pass" -c $cookie_path > /dev/null};
+	my ( $stdout, $stderr, $exit ) = capture_output( $cmd, $param_href );
+	    if ( $exit == 0 ) {
+	        $log->info("Action: cookie from JGI saved at $cookie_path");
+	    }
+	    else {
+	        $log->error("Action: failed to save cookie from JGI:\n$stderr");
+	    }
+
+	#modify cookie to handle another site (.jgi-psf.org) with fungi data
+	open my $cookie_fh, "+<", $cookie_path or $log->logdie("Can't open $cookie_path:$!");
+	my $site;
+	while (<$cookie_fh>) {
+		chomp;
+		#say "COOKIE BEFORE:\n$_";
+		if ( m{\A\.jgi\.doe\.gov(.+)\z} ){
+			$site = $1;
+			#say "SITE:$site";
+			$site = '.jgi-psf.org' . $site;
+		}
+	}
+	say {$cookie_fh} $site;
+	close $cookie_fh;
+
+	my $cookie_data = path($cookie_path)->slurp;
+	$log->trace("COOKIE AFTER:\n$cookie_data");
+
+    return;
+}
+
+
+sub get_jgi_xml {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('jgi_xml() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    my $OUT      = $param_href->{OUT}      or $log->logcroak('no $OUT specified on command line!');
+    my $URL      = $param_href->{URL}      or $log->logcroak('no $URL found in sub invocation!');
+	my $cookie_path = path($OUT, 'cookie_jgi');
+	(my $xml_name = $URL) =~ s{\A(?:.+?)organism=(.+)\z}{$1};
+	my $xml_path = path($OUT, $xml_name . '.xml')->canonpath;
+
+	my $cmd = qq{curl $URL -b $cookie_path -c $cookie_path > $xml_path};
+	my ( $stdout, $stderr, $exit ) = capture_output( $cmd, $param_href );
+	    if ( $exit == 0 ) {
+	        $log->debug("Action: XML $xml_name from JGI saved at $xml_path");
+
+			#check for zero size
+			if (-z $xml_path) {
+				$log->error("ZERO size: $xml_path");
+			}
+	    }
+	    else {
+	        $log->error("Action: failed to save $xml_name from JGI:\n$stderr");
+	    }
+
+
+
+    return $xml_name, $xml_path;
+}
+
 
 
 
@@ -2268,6 +2677,8 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
  perl ./lib/CollectGenomes.pm --mode=gi_taxid -if ./nr/gi_taxid_prot.dmp.gz -o ./nr/ -ho localhost -u msandbox -p msandbox -d nr --port=5625 --socket=/tmp/mysql_sandbox5625.sock --engine=InnoDB
 
  perl ./lib/CollectGenomes.pm --mode=ti_gi_fasta -d nr -ho localhost -u msandbox -p msandbox --port=5625 --socket=/tmp/mysql_sandbox5625.sock --engine=InnoDB
+
+ perl ./lib/CollectGenomes.pm --mode=mysqldump -o ./t/nr -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
  Part IV -> set phylogeny for focal species:
 

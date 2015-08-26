@@ -32,6 +32,7 @@ requires 'FindBin';
 requires 'HTML::TreeBuilder';
 requires 'LWP::Simple';
 requires 'DateTime::Tiny';
+requires 'XML::Twig';
 
 
 author_requires 'Regexp::Debugger';

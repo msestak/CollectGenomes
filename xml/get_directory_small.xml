@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<organismDownloads name="Metazome">
+<folder name="Xtropicalis">
+<file label="Metazome" filename="Xtropicalis_14_readme.txt" size="2 KB" sizeInBytes="2328" timestamp="Thu Sep 20 16:36:49 PDT 2012" url="/ext-api/downloads/get_tape_file?blocking=true&amp;url=/Metazome/download/_JAMO/53f398a00d878557fd3b7484/Xtropicalis_14_readme.txt" project="" md5="6ebedcddffee46c53302aa1ed1e0bbdb"/>
+<folder name="assembly">
+<file label="Metazome" filename="Xtropicalis_14_RM.fa.gz" size="341 MB" sizeInBytes="358510833" timestamp="Thu Sep 20 16:36:48 PDT 2012" url="/ext-api/downloads/get_tape_file?blocking=true&amp;url=/Metazome/download/_JAMO/53f398a00d878557fd3b748c/Xtropicalis_14_RM.fa.gz" project="" md5="169032996d7efc402fd21f87bb127e4f"/>
+<file label="Metazome" filename="Xtropicalis_14.fa.gz" size="388 MB" sizeInBytes="407619056" timestamp="Thu Sep 20 16:36:41 PDT 2012" url="/ext-api/downloads/get_tape_file?blocking=true&amp;url=/Metazome/download/_JAMO/53f398a00d878557fd3b748b/Xtropicalis_14.fa.gz" project="" md5="2e8c1ed4be0157402bca1f4a9075765a"/>
+</folder>
+<folder name="annotation">
+<file label="Metazome" filename="Xtropicalis_14_transcript.fa.gz" size="11 MB" sizeInBytes="12038530" timestamp="Thu Sep 20 16:36:33 PDT 2012" url="/ext-api/downloads/get_tape_file?blocking=true&amp;url=/Metazome/download/_JAMO/53f398a00d878557fd3b7486/Xtropicalis_14_transcript.fa.gz" project="" md5="108a56d455400dc9d49a26709733d6f0"/>
+<file label="Metazome" filename="Xtropicalis_14_peptide.fa.gz" size="6 MB" sizeInBytes="6847013" timestamp="Thu Sep 20 16:36:32 PDT 2012" url="/ext-api/downloads/get_tape_file?blocking=true&amp;url=/Metazome/download/_JAMO/53f398a00d878557fd3b7488/Xtropicalis_14_peptide.fa.gz" project="" md5="c070e95505022e7fac6c861313adeaa6"/>
+<file label="Metazome" filename="Xtropicalis_14_gene_exons.gff3.gz" size="4 MB" sizeInBytes="5079977" timestamp="Thu Sep 20 16:36:33 PDT 2012" url="/ext-api/downloads/get_tape_file?blocking=true&amp;url=/Metazome/download/_JAMO/53f398a00d878557fd3b7489/Xtropicalis_14_gene_exons.gff3.gz" project="" md5="e75cd8833249444c5f7611049a1a628c"/>
+<file label="Metazome" filename="Xtropicalis_14_gene.gff3.gz" size="3 MB" sizeInBytes="3654755" timestamp="Thu Sep 20 16:36:33 PDT 2012" url="/ext-api/downloads/get_tape_file?blocking=true&amp;url=/Metazome/download/_JAMO/53f398a00d878557fd3b7487/Xtropicalis_14_gene.gff3.gz" project="" md5="5296555c9e515eb2638eaad0d153f8c5"/>
+<file label="Metazome" filename="Xtropicalis_14_cds.fa.gz" size="10 MB" sizeInBytes="10594197" timestamp="Thu Sep 20 16:36:32 PDT 2012" url="/ext-api/downloads/get_tape_file?blocking=true&amp;url=/Metazome/download/_JAMO/53f398a00d878557fd3b7485/Xtropicalis_14_cds.fa.gz" project="" md5="b5733a2f82572a7e9a2d89ae6eb8de92"/>
+<file label="Metazome" filename="Xtropicalis_14_annotation_info.txt.gz" size="1 MB" sizeInBytes="1835386" timestamp="Thu Sep 20 16:36:33 PDT 2012" url="/ext-api/downloads/get_tape_file?blocking=true&amp;url=/Metazome/download/_JAMO/53f398a00d878557fd3b748a/Xtropicalis_14_annotation_info.txt.gz" project="" md5="60c75edaafb988cd81cc94d613a996e1"/>
+</folder>
+</folder>
+</organismDownloads>
