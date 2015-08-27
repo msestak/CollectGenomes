@@ -2468,37 +2468,87 @@ sub jgi_download {
 		my ($xml_name, $xml_path) = get_jgi_xml( { URL => $zome, %{$param_href} } );
 
 			my $twig= new XML::Twig(pretty_print => 'indented');
-			$twig->parsefile( $xml_path );    # build the twig
+			$twig->parsefile( $xml_path );			# build the twig
 			
 			my $root= $twig->root;					# get the root of the twig
 			my @folders_upper = $root->children;    # get the folders list
 			
+			UPPER:
 			foreach my $folder_upper (@folders_upper) {
 				my $species_name = $folder_upper->att( 'name' );
-				say "FOLDER_UPPER-NAME:{$species_name}";
+				$log->debug("FOLDER_UPPER-NAME:{$species_name}");
+
+				#skip unwanted divisions and go into early_release folder
+				foreach ($species_name) {
+					when (/global_analysis/) { $log->trace("Action: skipped upper_folder $species_name") and next UPPER; }
+					when (/orthology/) { $log->trace("Action: skipped upper_folder $species_name") and next UPPER; }
+					when (/inParanoid/) { $log->trace("Action: skipped upper_folder $species_name") and next UPPER; }
+					when (/early_release/) {
+						my @early_folders_upper = $folder_upper->children;
+						$log->warn("Action: working in $species_name");
+						foreach my $early_folder_upper (@early_folders_upper) {
+							my $early_species_name = $early_folder_upper->att( 'name' );
+							say "EARLY_FOLDER_UPPER-NAME:{$early_species_name}";
+							
+							my @early_folders= $early_folder_upper->children;
+							say "LISTING EARLY_FOLDERS:@early_folders";
+
+							#download_jgi_fasta();
+						}
+					}
+				}
 			
 				my @folders= $folder_upper->children;
-				say "LISTING FOLDERS:@folders";
+				#say "LISTING FOLDERS:@folders";
 				
+				FOLDER:
 				foreach my $folder (@folders) {
+					my $division_name = $folder->att( 'name' );
+					if (! defined $division_name) {
+						$log->trace("Action: skipped empty folder") and next FOLDER;
+					}
+					else {
+						#say "FOLDER-NAME:{$division_name}";
+					}
+					foreach ($division_name) {
+						when (/assembly/) { $log->trace("Action: skipped folder $division_name") and next FOLDER; }
+						when (/diversity/) { $log->trace("Action: skipped folder $division_name") and next FOLDER; }
+						when (/bam/) { $log->trace("Action: skipped folder $division_name") and next FOLDER; }
+						when (/expression/) { $log->trace("Action: skipped folder $division_name") and next FOLDER; }
+
+					}
+
+
 					my @files = $folder->children;
-					say "LISTING FILES:@files";
+					#say "LISTING FILES:@files";
 					foreach my $file (@files) {
 						my $filename = $file->att( 'filename' );
-						say "filename:$filename";
-						my $size = $file->att( 'size' );
-						say "size:$size";
-						my $url = $file->att( 'url' );
-						say "url:$url";
-						$url =~ s{/ext-api(?:.+?)url=(.+)}{$1};
-						say $url;
-						$url = 'http://genome.jgi.doe.gov' . $url;
-						say $url;
+						if ($filename =~ m{protein.fa.gz\z}g) {
+							my $label = $file->att( 'label' );
+							say "label:$label";
+							say "filename:$filename";
+							my $size = $file->att( 'size' );
+							say "size:$size";
+							my $size_in_bytes = $file->att( 'sizeInBytes' );
+							say "sizeInBytes:$size_in_bytes";
+							my $timestamp = $file->att( 'timestamp' );
+							say "timestamp:$timestamp";
+							my $project = $file->att( 'project' );
+							say "project:$project";
+							my $md5 = $file->att( 'md5' );
+							say "md5:$md5";
+							my $url = $file->att( 'url' );
+							say "url:$url";
+							$url =~ s{/ext-api(?:.+?)url=(.+)}{$1};
+							say $url;
+							$url = 'http://genome.jgi.doe.gov' . $url;
+							say $url;
+						}
 		
 					}
 				}
 			}
-			sleep 5;
+			sleep 1;
 
 	}
 
@@ -2562,6 +2612,14 @@ sub save_cookie_not_working {
     return;
 }
 
+### INTERNAL UTILITY ###
+# Usage      : save_cookie( $param_href );
+# Purpose    : downloads cookie from JGI
+# Returns    : nothing
+# Parameters : needs $OUT
+# Throws     : 
+# Comments   : needed for jgi_download()
+# See Also   : jgi_download()
 sub save_cookie {
     my $log = Log::Log4perl::get_logger("main");
     $log->logcroak('save_cookie() needs a $param_href') unless @_ == 1;
@@ -2606,7 +2664,14 @@ sub save_cookie {
     return;
 }
 
-
+### INTERNAL UTILITY ###
+# Usage      : get_jgi_xml( $param_href );
+# Purpose    : downloads xml file with locations of JGI genomes
+# Returns    : $xml_name, $xml_path
+# Parameters : needs $OUT $DATABASE
+# Throws     : 
+# Comments   : needed for jgi_download()
+# See Also   : jgi_download()
 sub get_jgi_xml {
     my $log = Log::Log4perl::get_logger("main");
     $log->logcroak('jgi_xml() needs a $param_href') unless @_ == 1;
@@ -2632,11 +2697,35 @@ sub get_jgi_xml {
 	        $log->error("Action: failed to save $xml_name from JGI:\n$stderr");
 	    }
 
-
-
     return $xml_name, $xml_path;
 }
 
+### INTERNAL UTILITY ###
+# Usage      : get_jgi_genome( $param_href );
+# Purpose    : downloads genome from JGI, inserts this info to jgi_download table
+#            : and saves genome as taxid if found
+# Returns    : nothing
+# Parameters : needs $OUT
+# Throws     : 
+# Comments   : needed for jgi_download()
+# See Also   : jgi_download()
+sub get_jgi_genome {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('get_jgi_genome() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    my $OUT      = $param_href->{OUT}      or $log->logcroak('no $OUT specified on command line!');
+    my $DATABASE = $param_href->{DATABASE} or $log->logcroak('no $DATABASE specified on command line!');
+
+    #get new handle
+    my $dbh = dbi_connect($param_href);
+
+	
+
+
+
+    return;
+}
 
 
 
