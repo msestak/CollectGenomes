@@ -2695,34 +2695,6 @@ sub nr_genome_counts {
     $log->error( "Action: updating $nr_cnt_tbl failed: $@" ) if $@;
     $log->debug( "Action: table $nr_cnt_tbl updated successfully!" ) unless $@;
 
-	
-	#	#DELETE smaller than 5000 genes in genome
-	#	my $delete_query_cnt = qq{
-	#	DELETE nr FROM $nr_cnt_tbl AS nr
-	#	WHERE genes_cnt < 5000;
-	#    };
-	#    eval { $dbh->do($delete_query_cnt, { async => 1 } ) };
-	#	my $rows_cnt2 = $dbh->mysql_async_result;
-	#    $log->trace( "Table $nr_cnt_tbl deleted $rows_cnt2 rows!" );
-	#
-	#    $log->debug( "Deleting $nr_cnt_tbl failed: $@" ) if $@;
-	#    $log->debug( "Table $nr_cnt_tbl deleted successfully!" ) unless $@;
-
-	##DELETE genomes already present in database
-	#my $delete_query_cnt2 = qq{
-	#DELETE nr FROM $nr_cnt_tbl AS nr
-	#INNER JOIN $table_ti_files AS ti
-	#ON nr.ti = ti.ti
-    #};
-    #eval { $dbh->do($delete_query_cnt2, { async => 1 } ) };
-	#my $rows_cnt_del2 = $dbh->mysql_async_result;
-    #$log->trace( "Table $nr_cnt_tbl deleted $rows_cnt_del2 rows!" );
-
-    #$log->debug( "Deleting $nr_cnt_tbl failed: $@" ) if $@;
-    #$log->debug( "Table $nr_cnt_tbl deleted successfully!" ) unless $@;
-
-
-
 	$dbh->disconnect;
 
 	return;
@@ -2811,6 +2783,111 @@ sub export_all_nr_genomes {
 }
 
 
+### INTERFACE SUB ###
+# Usage      : get_existing_ti( $param_href );
+# Purpose    : collects tax_ids from tiktaalik and inserts it as a table in db
+# Returns    : nothing
+# Parameters : ( $param_href )
+# Throws     : croaks for parameters
+# Comments   : 
+# See Also   : 
+sub get_existing_ti {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak( 'get_existing_ti() needs a $param_href' ) unless @_ == 1;
+    my ( $param_href ) = @_;
+
+    my $ENGINE = defined $param_href->{ENGINE} ? $param_href->{ENGINE} : 'InnoDB';
+    my $IN       = $param_href->{IN}       or $log->logcroak('no $IN specified on command line!');
+    my $DATABASE = $param_href->{DATABASE} or $log->logcroak('no $DATABASE specified on command line!');
+    my %TABLES   = %{ $param_href->{TABLES} };
+    my $NAMES_TABLE = $TABLES{names};
+
+	#collect genomes from $IN
+	my @ti_files = File::Find::Rule->file()
+								   ->name(qr/\A\d+\z/)
+								   ->in($IN);
+	my @tis;
+	foreach my $file (@ti_files) {
+		my $ti = path($file)->basename;
+		push @tis, $ti;
+	}
+	my @tis_sorted = sort {$a <=> $b} @tis;
+
+	#get new database handle
+	my $dbh = dbi_connect($param_href);
+
+	#insert tax_ids into the database
+	my $table_ti = "ti_files";
+    my $create_query = qq{
+    CREATE TABLE $table_ti (
+    ti INT UNSIGNED NOT NULL,
+	species_name VARCHAR(200) NULL,
+    PRIMARY KEY(ti),
+	KEY(species_name)
+    )ENGINE=$ENGINE CHARSET=ascii };
+    eval { $dbh->do($create_query) };
+	create_table( { TABLE_NAME => $table_ti, DBH => $dbh, QUERY => $create_query, %{$param_href} } );
+
+
+    #now insert in single transaction (performance better)
+	$dbh->{AutoCommit} = 0;    # enable transactions, if possible
+    eval {
+        my $insert_query = qq{
+        INSERT INTO $table_ti (ti)
+		VALUES (?)
+        };
+        my $sth = $dbh->prepare($insert_query);
+		foreach my $ti (@tis_sorted) {
+			$sth->execute($ti);
+		}
+
+        $dbh->commit;          # commit the changes if we get this far
+		$log->debug( "Table $table_ti inserted successfully!");
+    };
+    if ($@) {
+        $log->logcarp( "Transaction aborted because $@" );
+
+        # now rollback to undo the incomplete changes
+        # but do it in an eval{} as it may also fail
+        eval { $dbh->rollback };
+
+        # add other application on-error-clean-up code here
+        if ($@) {
+            $log->logcarp( "Inserting into $table_ti failed! Transaction failed to commit and failed to rollback!" );
+        }
+    }
+
+	#UPDATE with species_names
+	$dbh->{AutoCommit} = 1;    # disable transactions
+    my $update_query = qq{
+	UPDATE $table_ti AS ti
+	SET ti.species_name = (SELECT DISTINCT na.species_name
+	FROM $NAMES_TABLE AS na WHERE ti.ti = na.ti);
+    };
+    eval { $dbh->do($update_query, { async => 1 } ) };
+	my $rows = $dbh->mysql_async_result;
+    $log->debug( "Action: update to $table_ti updated $rows rows!" );
+
+    $log->error( "Action: updating $table_ti failed: $@" ) if $@;
+    $log->debug( "Action: table $table_ti updated successfully!" ) unless $@;
+
+	#update for Hydra magnipapillata
+	my $update_hydra = qq{
+	UPDATE $table_ti
+	SET species_name = 'Hydra magnipapillata'
+	WHERE ti = 6085
+	};
+	eval { $dbh->do($update_hydra, { async => 1 } ) };
+	my $rows_h = $dbh->mysql_async_result;
+    $log->debug( "Action: update to $table_ti updated $rows_h rows!" );
+    $log->error( "Action: updating $table_ti failed: $@" ) if $@;
+    $log->debug( "Action: table $table_ti updated successfully!" ) unless $@;
+
+	$dbh->disconnect;
+
+	return;
+
+}
 
 
 
@@ -2876,7 +2953,7 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
 
  perl ./lib/CollectGenomes.pm --mode=export_all_nr_genomes -o ./nr/ --tables nr=nr_ti_gi_fasta_InnoDB_cnt -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v
 
-
+ Part VI -> combine nr genomes with Ensembl genomes and prin them out:
 
  perl ./bin/CollectGenomes.pm --mode=get_existing_ti --in=./t_eukarya/ -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
@@ -2890,11 +2967,11 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
 
  perl ./bin/CollectGenomes.pm --mode=copy_existing_genomes --in=/home/msestak/dropbox/Databases/db_29_07_15/data/eukarya_old/  --out=/home/msestak/dropbox/Databases/db_29_07_15/data/eukarya/ -ho localhost -d nr -u msandbox -p msandbox -po 5622 -s /tmp/mysql_sandbox5622.sock
 
- Part VI -> download genomes from JGI:
+ Part VII -> download genomes from JGI: (not working)
 
  perl ./lib/CollectGenomes.pm --mode=jgi_download --names=names_martin7 -o ./xml/ -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v
 
- Part VII -> prepare and run cd-hit
+ Part VIII -> prepare and run cd-hit
  perl ./bin/CollectGenomes.pm --mode=prepare_cdhit_per_phylostrata --in=./data_in/t_eukarya/ --out=./data_out/ -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
  perl ./bin/CollectGenomes.pm --mode=prepare_cdhit_per_phylostrata --in=/home/msestak/dropbox/Databases/db_29_07_15/data/archaea/ --out=/home/msestak/dropbox/Databases/db_29_07_15/data/cdhit/ -ho localhost -d nr -u msandbox -p msandbox -po 5622 -s /tmp/mysql_sandbox5622.sock
 
