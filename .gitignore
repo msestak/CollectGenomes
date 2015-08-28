@@ -36,7 +36,7 @@ MYMETA.*
 /species_EnsemblMetazoa.txt
 /species_EnsemblPlants.txt
 /species_EnsemblProtists.txt
-/statistics_ensembl_all.txt
+#/statistics_ensembl_all.txt
 
 ensembl*
 ens*

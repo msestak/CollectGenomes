@@ -30,7 +30,7 @@ my $cookie_jar = HTTP::Cookies::Netscape->new(
 
 my $mech = WWW::Mechanize->new( cookie_jar => $cookie_jar, autocheck => 1 );
 
-
+http://genome.jgi-psf.org/ext-api/downloads/get-directory?organism=fungi
 
 foreach my $URL (@jgi_zomes) {
 	(my $xml_name = $URL) =~ s{\A(?:.+?)organism=(.+)\z}{$1};
