@@ -53,6 +53,8 @@ our @EXPORT_OK = qw{
 	proc_create_phylo
 	call_proc_phylo
 	jgi_download
+	nr_genome_counts
+	export_all_nr_genomes
     get_missing_genomes
 	delete_extra_genomes
 	delete_full_genomes
@@ -132,6 +134,8 @@ sub main {
         call_phylo                    => \&call_proc_phylo,
 		jgi_download                  => \&jgi_download,
         get_existing_ti               => \&get_existing_ti,
+        nr_genome_counts              => \&nr_genome_counts,
+		export_all_nr_genomes         => \&export_all_nr_genomes,
         get_missing_genomes           => \&get_missing_genomes,
         delete_extra_genomes          => \&delete_extra_genomes,
         delete_full_genomes           => \&delete_full_genomes,
@@ -183,10 +187,10 @@ sub get_parameters_from_cmd {
     $log->trace( 'My @ARGV: {', join( "} {", @ARGV ), '}', "\n" );
 	#<<< notidy
     my ($help,  $man,      @MODE,
-		$NODES, $NAMES,    $BLASTDB, $ORG,      $TAX_ID, $MAP,
+		$NODES, $NAMES,    %TABLES,   $ORG,      $TAX_ID, $MAP,
 		$OUT,   $IN,       $OUTFILE, $INFILE,
-		$REMOTE_HOST,      $REMOTE_DIR,         $REMOTE_FILE,
         $HOST,  $DATABASE, $USER,    $PASSWORD, $PORT,   $SOCKET, $CHARSET, $ENGINE,
+		$REMOTE_HOST,      $REMOTE_DIR,         $REMOTE_FILE,
     );
 	#>>>
     my $VERBOSE = '';    #default false (silent)
@@ -198,7 +202,7 @@ sub get_parameters_from_cmd {
         'nodes|no=s'       => \$NODES,
         'names|na=s'       => \$NAMES,
         'map=s'            => \$MAP,
-        'blastdb|bl=s'     => \$BLASTDB,
+        'tables|tbl=s'     => \%TABLES,        #accepts 1 or more arguments
         'organism|org=s'   => \$ORG,
         'tax_id|t=i'       => \$TAX_ID,
         'out|o=s'          => \$OUT,
@@ -254,7 +258,7 @@ sub get_parameters_from_cmd {
         {   MODE        => \@MODE,
             NODES       => $NODES,
             NAMES       => $NAMES,
-            BLASTDB     => $BLASTDB,
+            TABLES      => \%TABLES,
             ORG         => $ORG,
 			MAP         => $MAP,
             TAX_ID      => $TAX_ID,
@@ -2232,317 +2236,6 @@ sub run_mysqldump {
     return;
 }
 
-### INTERFACE SUB ###
-# Usage      : get_missing_genomes( $param_href );
-# Purpose    : JOINs existing tis with all possible tis from nr_base (ti, gi, fasta)
-# Returns    : nothing
-# Parameters : ( $param_href )
-# Throws     : croaks for parameters
-# Comments   : 
-# See Also   : 
-sub get_missing_genomes {
-    my $log = Log::Log4perl::get_logger("main");
-    $log->logcroak( 'get_missing_genomes() needs a $param_href' ) unless @_ == 1;
-    my ( $param_href ) = @_;
-
-	my $DATABASE = $param_href->{DATABASE}    or $log->logcroak( 'no $DATABASE specified on command line!' );
-			
-	#get new handle
-    my $dbh = dbi_connect($param_href);
-
-	#first prompt to select nr_base table
-    my $select_tables = qq{
-    SELECT TABLE_NAME 
-    FROM INFORMATION_SCHEMA.TABLES
-    WHERE TABLE_SCHEMA = '$DATABASE'
-    };
-    #get nr_base NAMES to array to feed to prompt()
-    my @tables = map { $_->[0] } @{ $dbh->selectall_arrayref($select_tables) };
-	#$log->trace( 'Returned tables: {', join('}{', @tables), '}' );
-    
-    #ask to choose nr_base
-    my $table_nr_base = prompt 'Choose which nr_base table you want to use ',
-      -menu => [ @tables ],
-	  -number,
-      '>';
-    $log->trace( "Using: $table_nr_base" );
-
-    #ask to choose phylo_table
-    my $table_phylo = prompt 'Choose which phylo table you want to use ',
-      -menu => [ @tables ],
-	  -number,
-      '>';
-    $log->trace( "Using: $table_phylo" );
-
-	#ask to choose ti_files_table
-    my $table_ti_files= prompt 'Choose which ti_files table you want to use ',
-      -menu => [ @tables ],
-	  -number,
-      '>';
-    $log->trace( "Using: $table_ti_files" );
-
-	#ask to choose names_table
-    my $table_names = prompt 'Choose which names table you want to use ',
-      -menu => [ @tables ],
-	  -number,
-      '>';
-    $log->trace( "Using: $table_names" );
-
-
-    #report what are you doing
-    $log->info( "---------->JOIN-ing two tables: $table_nr_base and $table_phylo" );
-
-	#drop table that is product of JOIN
-	my $table_eu = "nr_base_eu$$";
-    my $drop_query = qq{
-    DROP TABLE IF EXISTS $table_eu
-    };
-    eval { $dbh->do($drop_query) };
-    $log->info("Dropping $table_eu failed: $@") if $@;
-    $log->info("Table $table_eu dropped successfully!") unless $@;
-
-    #create table
-    my $create_query = qq{
-    CREATE TABLE $table_eu (
-    ti INT UNSIGNED NOT NULL,
-    gi INT UNSIGNED NOT NULL,
-	fasta MEDIUMTEXT NOT NULL,
-    PRIMARY KEY(ti, gi)
-    )ENGINE=TokuDB CHARSET=ascii ROW_FORMAT=tokudb_zlib
-    };
-    eval { $dbh->do($create_query) };
-    $log->info( "Creating $table_eu failed: $@" ) if $@;
-    $log->info( "Table $table_eu created successfully!" ) unless $@;
-
-    my $insert_query = qq{
-    INSERT INTO $table_eu (ti, gi, fasta)
-    SELECT nr.ti, nr.gi, nr.fasta
-    FROM $table_nr_base AS nr
-    INNER JOIN $table_phylo AS ph ON ph.ps2 = nr.ti
-    };   #ps2 are eukaryotes
-    eval { $dbh->do($insert_query, { async => 1 } ) };
-
-    #check status while running
-    {    
-        my $dbh_check         = dbi_connect($param_href);
-        until ( $dbh->mysql_async_ready ) {
-            my $processlist_query = qq{
-            SELECT TIME_MS, STATE FROM INFORMATION_SCHEMA.PROCESSLIST
-            WHERE DB = ? AND INFO LIKE 'INSERT%';
-            };
-            my $sth = $dbh_check->prepare($processlist_query);
-            $sth->execute($DATABASE);
-            my ( $time_ms, $state );
-            $sth->bind_columns( \( $time_ms, $state ) );
-            while ( $sth->fetchrow_arrayref ) {
-                $time_ms = $time_ms / 1000;
-                my $process = sprintf( "Time running:%0.3f sec\tSTATE:%s\n", $time_ms, $state );
-                $log->trace( $process );
-                sleep 10;
-            }
-        }
-    }    #end check
-    my $rows = $dbh->mysql_async_result;
-    $log->trace( "Import inserted $rows rows!" );
-
-    $log->debug( "Loading $table_eu failed: $@" ) if $@;
-    $log->debug( "Table $table_eu loaded successfully!" ) unless $@;
-
-    #drop COUNT table (num of genes per ti)
-	my $table_eu_cnt = "nr_base_eu_cnt$$";
-    my $drop_query_cnt = qq{
-    DROP TABLE IF EXISTS $table_eu_cnt
-    };
-    eval { $dbh->do($drop_query_cnt) };
-    $log->info("Dropping $table_eu_cnt failed: $@") if $@;
-    $log->info("Table $table_eu_cnt dropped successfully!") unless $@;
-
-    #create table
-    my $create_query_cnt = qq{
-    CREATE TABLE $table_eu_cnt (
-    ti INT UNSIGNED NOT NULL,
-    genes_cnt INT UNSIGNED NOT NULL,
-	species_name VARCHAR(200) NULL,
-    PRIMARY KEY(ti),
-	KEY(genes_cnt),
-	KEY(species_name)
-    )ENGINE=TokuDB CHARSET=ascii ROW_FORMAT=tokudb_zlib
-    };
-    eval { $dbh->do($create_query_cnt) };
-    $log->info( "Creating $table_eu_cnt failed: $@" ) if $@;
-    $log->info( "Table $table_eu_cnt created successfully!" ) unless $@;
-
-	#INSERT all eukaryotes
-    my $insert_query_cnt = qq{
-    INSERT INTO $table_eu_cnt (ti, genes_cnt)
-    SELECT ti, COUNT(ti) AS genes_cnt
-    FROM $table_eu
-	GROUP BY ti
-    };
-    eval { $dbh->do($insert_query_cnt, { async => 1 } ) };
-	my $rows_cnt = $dbh->mysql_async_result;
-    $log->trace( "Import to $table_eu_cnt inserted $rows_cnt rows!" );
-
-    $log->debug( "Loading $table_eu_cnt failed: $@" ) if $@;
-    $log->debug( "Table $table_eu_cnt loaded successfully!" ) unless $@;
-	
-	#DELETE smaller than 5000 genes in genome
-	my $delete_query_cnt = qq{
-	DELETE nr FROM $table_eu_cnt AS nr
-	WHERE genes_cnt < 5000;
-    };
-    eval { $dbh->do($delete_query_cnt, { async => 1 } ) };
-	my $rows_cnt2 = $dbh->mysql_async_result;
-    $log->trace( "Table $table_eu_cnt deleted $rows_cnt2 rows!" );
-
-    $log->debug( "Deleting $table_eu_cnt failed: $@" ) if $@;
-    $log->debug( "Table $table_eu_cnt deleted successfully!" ) unless $@;
-
-	#DELETE genomes already present in database
-	my $delete_query_cnt2 = qq{
-	DELETE nr FROM $table_eu_cnt AS nr
-	INNER JOIN $table_ti_files AS ti
-	ON nr.ti = ti.ti
-    };
-    eval { $dbh->do($delete_query_cnt2, { async => 1 } ) };
-	my $rows_cnt_del2 = $dbh->mysql_async_result;
-    $log->trace( "Table $table_eu_cnt deleted $rows_cnt_del2 rows!" );
-
-    $log->debug( "Deleting $table_eu_cnt failed: $@" ) if $@;
-    $log->debug( "Table $table_eu_cnt deleted successfully!" ) unless $@;
-
-
-	#UPDATE with species_names
-    my $update_query_cnt = qq{
-	UPDATE $table_eu_cnt AS nr
-	SET nr.species_name = (SELECT DISTINCT na.species_name
-	FROM $table_names AS na WHERE nr.ti = na.ti);
-    };
-    eval { $dbh->do($update_query_cnt, { async => 1 } ) };
-	my $rows_cnt3 = $dbh->mysql_async_result;
-    $log->trace( "Update to $table_eu_cnt updated $rows_cnt3 rows!" );
-
-    $log->debug( "Updating $table_eu_cnt failed: $@" ) if $@;
-    $log->debug( "Table $table_eu_cnt updated successfully!" ) unless $@;
-
-	$dbh->disconnect;
-
-	return;
-}
-
-
-
-### INTERFACE SUB ###
-# Usage      : jgi_download( $param_href );
-# Purpose    : it downloads proteomes from JGI Metazome site
-# Returns    : nothing
-# Parameters : $param_href with $OUT
-# Throws     : 
-# Comments   : uses XML::Twig to parse XML file
-# See Also   : 
-sub jgi_download {
-    my $log = Log::Log4perl::get_logger("main");
-    $log->logcroak('jgi_download() needs a $param_href') unless @_ == 1;
-    my ($param_href) = @_;
-
-    my $OUT      = $param_href->{OUT}      or $log->logcroak('no $OUT specified on command line!');
-	my $DATABASE = $param_href->{DATABASE}    or $log->logcroak( 'no $DATABASE specified on command line!' );
-    my $ENGINE = defined $param_href->{ENGINE} ? $param_href->{ENGINE} : 'InnoDB';
-    my $table    = 'jgi_download';
-
-    #get new handle
-    my $dbh = dbi_connect($param_href);
-
-    #report what are you doing
-    $log->info( "---------->Creating jgi_download table:$table" );
-    my $create_query = sprintf( qq{
-    CREATE TABLE %s (
-	id INT UNSIGNED AUTO_INCREMENT NOT NULL,
-    label VARCHAR(20) NOT NULL,
-	filename VARCHAR(100) NOT NULL,
-	size VARCHAR(10) NOT NULL,
-	sizeInBytes INT UNSIGNED NOT NULL,
-    timestamp VARCHAR(100),
-	project VARCHAR(100) NULL,
-	md5 VARCHAR(100) NULL,
-	url VARCHAR(200) NOT NULL,
-	ti INT UNSIGNED NULL,
-	species_name VARCHAR(200),
-    PRIMARY KEY(id),
-    KEY(ti),
-	KEY(filename),
-	KEY(species_name)
-    )ENGINE=$ENGINE CHARACTER SET=ascii }, $dbh->quote_identifier($table) );
-	create_table( { TABLE_NAME => $table, DBH => $dbh, QUERY => $create_query, %{$param_href} } );
-
-	#curl downloads cookie to use later
-	save_cookie($param_href);
-
-	download_phytozome($param_href);
-	#download_metazome($param_href);
-	#download_fungi($param_href);
-
-	# http://genome.jgi-psf.org/ext-api/downloads/get-directory?organism=fungi
-	# http://genome.jgi.doe.gov/ext-api/downloads/get-directory?organism=Metazome
-	# http://genome.jgi.doe.gov/ext-api/downloads/get-directory?organism=PhytozomeV10
-	
-    return;
-}
-
-
-
-
-### INTERNAL UTILITY ###
-# Usage      : save_cookie( $param_href );
-# Purpose    : downlods cookie from JGI
-# Returns    : nothing
-# Parameters : needs $OUT
-# Throws     : 
-# Comments   : needed for jgi_download()
-# See Also   : jgi_download()
-sub save_cookie_not_working {
-    my $log = Log::Log4perl::get_logger("main");
-    $log->logcroak('save_cookie() needs a $param_href') unless @_ == 1;
-    my ($param_href) = @_;
-
-    my $OUT      = $param_href->{OUT}      or $log->logcroak('no $OUT specified on command line!');
-
-	my $cookie_path = path($OUT, 'cookie_jgi');
-
-	use HTTP::Cookies;
-	my $cookie_jar = HTTP::Cookies->new(
-	   file     => $cookie_path,
-	   autosave => 1,
-	);
-	my $ua = LWP::UserAgent->new;
-	$ua->cookie_jar( $cookie_jar );
-
-	#setup request
-	my $url = 'https://signon.jgi.doe.gov/signon/create';
-	my $user = q{msestak@irb.hr};
-	my $pass = q{jgi_for_lifem8};
-	use HTTP::Request::Common qw(GET);
-	my $req = GET($url); 
-	$req->authorization_basic($user, $pass);
-	#$req->content('login_username='.$user.'&login_password='.$pass.'&action=login');
-	
-	#do it         
-	my $response = $ua->request($req);
-	sleep 3;
-	
-	if ($response->is_error()) {
-	    printf " %s\n", $response->status_line;
-		print "https request error!\n";
-	} 
-	else {
-	    my $content = $response->content();
-	    print $content;
-	}
-	
-	print $response->status_line;
-
-    return;
-}
 
 ### INTERNAL UTILITY ###
 # Usage      : save_cookie( $param_href );
@@ -2712,7 +2405,7 @@ sub get_jgi_genome {
 		INSERT INTO jgi_download ( $fieldlist )
 	    VALUES ( $field_placeholders )
 		} );
-        my $sth = $dbh->prepare($insert_query);
+        my $sth2 = $dbh->prepare($insert_query);
 
         my @col_loh;
         push @col_loh,
@@ -2731,7 +2424,7 @@ sub get_jgi_genome {
         #hash slice - values come in order of columns list
       INSERT:
         foreach (@col_loh) {
-            eval { $sth->execute( @{$_}{@columns} ) };
+            eval { $sth2->execute( @{$_}{@columns} ) };
             if ($@) {
                 my $species_error = $_->{species_name};
                 $log->error(qq|Report: insert failed for:$species_error (duplicate genome with PRE?)|);
@@ -2809,7 +2502,14 @@ sub download_phytozome {
 	}
 }
 
-
+### INTERNAL UTILITY ###
+# Usage      : list_folders( $param_href );
+# Purpose    : lists folders with species and grabs files from them
+# Returns    : hash ref of params for get_jgi_genome()
+# Parameters : $param_href
+# Throws     : 
+# Comments   : part of jgi_download mode
+# See Also   : jgi_download()
 sub list_folders {
 	my $log = Log::Log4perl::get_logger("main");
     $log->logcroak('list_folders() needs a $folder_upper') unless @_ == 1;
@@ -2885,6 +2585,244 @@ sub list_folders {
 }
 
 
+### INTERFACE SUB ###
+# Usage      : nr_genome_counts( $param_href );
+# Purpose    : gets gene count of all tis (species and other categories) from nr table
+# Returns    : nothing
+# Parameters : ( $param_href )
+# Throws     : croaks for parameters
+# Comments   : 
+# See Also   : 
+sub nr_genome_counts {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak( 'nr_genome_counts() needs a $param_href' ) unless @_ == 1;
+    my ( $param_href ) = @_;
+
+    my $ENGINE = defined $param_href->{ENGINE} ? $param_href->{ENGINE} : 'InnoDB';
+	my $DATABASE = $param_href->{DATABASE} or $log->logcroak( 'no $DATABASE specified on command line!' );
+	my $TABLE    = $param_href->{TABLE};   #optional (can come from prompt too)
+    my %TABLES   = %{ $param_href->{TABLES} };
+	my $NR_TABLE = $TABLES{nr};
+	my $NAMES_TABLE = $TABLES{names};
+			
+	#get new handle
+    my $dbh = dbi_connect($param_href);
+
+	#select nr table for calculation of counts
+	my $nr_tbl;
+	if ($NR_TABLE) {
+		$nr_tbl = $NR_TABLE;
+    	$log->trace( "Action: using: $nr_tbl from command line" );
+	}
+	else {
+		#first prompt to select nr_base table
+    	my $select_tables = qq{
+    	SELECT TABLE_NAME 
+    	FROM INFORMATION_SCHEMA.TABLES
+    	WHERE TABLE_SCHEMA = '$DATABASE' AND TABLE_NAME LIKE 'nr%'
+    	};
+    	my @tables = map { $_->[0] } @{ $dbh->selectall_arrayref($select_tables) };
+    	
+    	#ask to choose NR_TI_GI_FASTA table
+    	my $table_nr = prompt 'Select NR_TI_GI_FASTA table to use ',
+    	  -menu => [ @tables ],
+		  -number,
+    	  '>';
+		$nr_tbl = $table_nr;
+    	$log->trace( "Action: using: $nr_tbl from prompt" );
+	}
+
+	#select names table for calculation of counts
+	my $na_tbl;
+	if ($NAMES_TABLE) {
+		$na_tbl = $NAMES_TABLE;
+    	$log->trace( "Action: using: $na_tbl from command line" );
+	}
+	else {
+    	my $select_tables = qq{
+    	SELECT TABLE_NAME 
+    	FROM INFORMATION_SCHEMA.TABLES
+    	WHERE TABLE_SCHEMA = '$DATABASE' AND TABLE_NAME LIKE 'names%'
+    	};
+    	my @tables = map { $_->[0] } @{ $dbh->selectall_arrayref($select_tables) };
+    	
+    	#ask to choose NAMES table
+    	my $table_na = prompt 'Select NAMES table to use ',
+    	  -menu => [ @tables ],
+		  -number,
+    	  '>';
+		$na_tbl = $table_na;
+    	$log->trace( "Action: using: $na_tbl from prompt" );
+	}
+
+    #create ti genomes count table
+	my $nr_cnt_tbl = "${nr_tbl}_cnt";
+    my $create_query_cnt = sprintf( qq{
+    CREATE TABLE %s (
+    ti INT UNSIGNED NOT NULL,
+    genes_cnt INT UNSIGNED NOT NULL,
+	species_name VARCHAR(200) NULL,
+    PRIMARY KEY(ti),
+	KEY(genes_cnt),
+	KEY(species_name)
+    )ENGINE=$ENGINE CHARSET=ascii }, $dbh->quote_identifier($nr_cnt_tbl) );
+	create_table( { TABLE_NAME => $nr_cnt_tbl, DBH => $dbh, QUERY => $create_query_cnt, %{$param_href} } );
+
+	#INSERT all eukaryotes
+    my $insert_query_cnt = qq{
+    INSERT INTO $nr_cnt_tbl (ti, genes_cnt)
+    SELECT ti, COUNT(ti) AS genes_cnt
+    FROM $nr_tbl
+	GROUP BY ti
+    };
+    eval { $dbh->do($insert_query_cnt, { async => 1 } ) };
+	my $rows_cnt = $dbh->mysql_async_result;
+    $log->debug( "Action: import to $nr_cnt_tbl inserted $rows_cnt rows!" );
+
+    $log->error( "Action: loading $nr_cnt_tbl failed: $@" ) if $@;
+    $log->debug( "Action: table $nr_cnt_tbl inserted successfully!" ) unless $@;
+
+	#UPDATE with species_names
+    my $update_query_cnt = qq{
+	UPDATE $nr_cnt_tbl AS nr
+	SET nr.species_name = (SELECT DISTINCT na.species_name
+	FROM $na_tbl AS na WHERE nr.ti = na.ti);
+    };
+    eval { $dbh->do($update_query_cnt, { async => 1 } ) };
+	my $rows_up = $dbh->mysql_async_result;
+    $log->debug( "Action: update to $nr_cnt_tbl updated $rows_up rows!" );
+
+    $log->error( "Action: updating $nr_cnt_tbl failed: $@" ) if $@;
+    $log->debug( "Action: table $nr_cnt_tbl updated successfully!" ) unless $@;
+
+	
+	#	#DELETE smaller than 5000 genes in genome
+	#	my $delete_query_cnt = qq{
+	#	DELETE nr FROM $nr_cnt_tbl AS nr
+	#	WHERE genes_cnt < 5000;
+	#    };
+	#    eval { $dbh->do($delete_query_cnt, { async => 1 } ) };
+	#	my $rows_cnt2 = $dbh->mysql_async_result;
+	#    $log->trace( "Table $nr_cnt_tbl deleted $rows_cnt2 rows!" );
+	#
+	#    $log->debug( "Deleting $nr_cnt_tbl failed: $@" ) if $@;
+	#    $log->debug( "Table $nr_cnt_tbl deleted successfully!" ) unless $@;
+
+	##DELETE genomes already present in database
+	#my $delete_query_cnt2 = qq{
+	#DELETE nr FROM $nr_cnt_tbl AS nr
+	#INNER JOIN $table_ti_files AS ti
+	#ON nr.ti = ti.ti
+    #};
+    #eval { $dbh->do($delete_query_cnt2, { async => 1 } ) };
+	#my $rows_cnt_del2 = $dbh->mysql_async_result;
+    #$log->trace( "Table $nr_cnt_tbl deleted $rows_cnt_del2 rows!" );
+
+    #$log->debug( "Deleting $nr_cnt_tbl failed: $@" ) if $@;
+    #$log->debug( "Table $nr_cnt_tbl deleted successfully!" ) unless $@;
+
+
+
+	$dbh->disconnect;
+
+	return;
+}
+
+### INTERFACE SUB ###
+# Usage      : export_all_nr_genomes( $param_href );
+# Purpose    : prints all nr genomes to dropdox/D.../db../data/eukarya
+# Returns    : nothing
+# Parameters : ( $param_href )
+# Throws     : croaks for parameters
+# Comments   : it extracts genomes from database and prints them to $OUT
+# See Also   : 
+sub export_all_nr_genomes {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak( 'export_nr_genomes() needs a $param_href' ) unless @_ == 1;
+    my ( $param_href ) = @_;
+
+	my $DATABASE = $param_href->{DATABASE} or $log->logcroak( 'no $DATABASE specified on command line!' );
+	my $OUT      = $param_href->{OUT}      or $log->logcroak( 'no $OUT specified on command line!' );
+    my %TABLES   = %{ $param_href->{TABLES} };
+	my $NR_TABLE = $TABLES{nr};
+			
+	#get new handle
+    my $dbh = dbi_connect($param_href);
+
+	#select nr_cnt table to get tis to export
+	my $nr_cnt_tbl;
+	if ($NR_TABLE) {
+		$nr_cnt_tbl = $NR_TABLE;
+    	$log->trace( "Action: using: $nr_cnt_tbl from command line" );
+	}
+	else {
+    	my $select_tables = qq{
+    	SELECT TABLE_NAME 
+    	FROM INFORMATION_SCHEMA.TABLES
+    	WHERE TABLE_SCHEMA = '$DATABASE' AND TABLE_NAME LIKE 'nr%'
+    	};
+    	my @tables = map { $_->[0] } @{ $dbh->selectall_arrayref($select_tables) };
+    	
+    	#ask to choose NR_TI_GI_FASTA table
+    	my $table_nr = prompt 'Select NR_TI_GI_FASTA_CNT table to use ',
+    	  -menu => [ @tables ],
+		  -number,
+    	  '>';
+		$nr_cnt_tbl = $table_nr;
+    	$log->trace( "Action: using: $nr_cnt_tbl from prompt" );
+	}
+
+	#get all tax_ids that belong to nr and print them to $OUT
+    my $tis_query = qq{
+    SELECT ti
+    FROM $nr_cnt_tbl
+	WHERE genes_cnt >= 2000
+    ORDER BY ti
+    };
+    my @tis = map { $_->[0] } @{ $dbh->selectall_arrayref($tis_query) };
+
+	(my $nr_tbl = $nr_cnt_tbl) =~ s{\A(.+)_cnt}{$1};
+	#starting iteration over @tis to extract genomes from nr_ti_gi_fasta_cnt table and print to $OUT
+	foreach my $ti (@tis) {
+		$log->trace( "Action: working on $ti" );
+		my $genome_out = path( $OUT, $ti);
+		if (-f $genome_out) {
+			unlink $genome_out and $log->trace( "Action: file $genome_out unlinked" );
+		}
+
+		my $genome_query = qq{
+		SELECT CONCAT('>', gi), fasta
+		INTO OUTFILE '$genome_out'
+		FIELDS TERMINATED BY '\n'
+		LINES TERMINATED BY '\n'
+		FROM $nr_tbl
+		WHERE ti = $ti
+		ORDER BY gi;
+		};
+
+		eval { $dbh->do($genome_query) };
+		$log->error( "Action: file $genome_out failed to export: $@" ) if $@;
+		$log->debug( "Action: file $genome_out exported" ) unless $@;
+	}
+
+	$dbh->disconnect;
+
+	return;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 1;
 __END__
@@ -2934,6 +2872,12 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
 
  Part V -> get genomes from nr base:
 
+ perl ./lib/CollectGenomes.pm --mode=nr_genome_counts --tables nr=nr_ti_gi_fasta_InnoDB --tables names=names_martin7 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+
+ perl ./lib/CollectGenomes.pm --mode=export_all_nr_genomes -o ./nr/ --tables nr=nr_ti_gi_fasta_InnoDB_cnt -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v
+
+
+
  perl ./bin/CollectGenomes.pm --mode=get_existing_ti --in=./t_eukarya/ -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
  perl ./bin/CollectGenomes.pm --mode=get_missing_genomes --in=. -ho localhost -d nr -u msandbox -p msandbox -po 5622 -s /tmp/mysql_sandbox5622.sock
@@ -2948,7 +2892,6 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
 
  Part VI -> download genomes from JGI:
 
- perl ./lib/CollectGenomes.pm --mode=jgi_download -o ./xml/
  perl ./lib/CollectGenomes.pm --mode=jgi_download --names=names_martin7 -o ./xml/ -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v
 
  Part VII -> prepare and run cd-hit
