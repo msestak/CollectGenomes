@@ -57,8 +57,8 @@ our @EXPORT_OK = qw{
 	nr_genome_counts
 	export_all_nr_genomes
     get_missing_genomes
-	delete_extra_genomes
-	delete_full_genomes
+	del_nr_genomes
+	del_total_genomes
 	print_nr_genomes
 	copy_existing_genomes
 	ensembl_ftp
@@ -139,8 +139,8 @@ sub main {
         nr_genome_counts              => \&nr_genome_counts,
 		export_all_nr_genomes         => \&export_all_nr_genomes,
         get_missing_genomes           => \&get_missing_genomes,
-        delete_extra_genomes          => \&delete_extra_genomes,
-        delete_full_genomes           => \&delete_full_genomes,
+        del_nr_genomes                => \&del_nr_genomes,
+        del_total_genomes             => \&del_total_genomes,
         print_nr_genomes              => \&print_nr_genomes,
         copy_existing_genomes         => \&copy_existing_genomes,
         ensembl_vertebrates           => \&ensembl_ftp_vertebrates,
@@ -2709,10 +2709,41 @@ sub nr_genome_counts {
     };
     eval { $dbh->do($update_query_cnt, { async => 1 } ) };
 	my $rows_up = $dbh->mysql_async_result;
-    $log->debug( "Action: update to $nr_cnt_tbl updated $rows_up rows!" );
-
+    $log->debug( "Action: update to $nr_cnt_tbl updated $rows_up rows!" ) unless $@;
     $log->error( "Action: updating $nr_cnt_tbl failed: $@" ) if $@;
-    $log->debug( "Action: table $nr_cnt_tbl updated successfully!" ) unless $@;
+
+	#delete all names with single part (genus, division, ...) and keep species names Homo_sapiens
+	#first get all species_names
+	my $species_query = qq{
+    SELECT species_name 
+    FROM $nr_cnt_tbl
+    ORDER BY species_name
+    };
+    my @species_names = map { $_->[0] } @{ $dbh->selectall_arrayref($species_query) };
+
+	SPECIES:
+	foreach my $taxon (@species_names) {
+		if (! defined $taxon) {
+			$log->warn("Report: NULL species_name found");
+			next SPECIES;
+		}
+		if ($taxon =~ m{\A(?:[^_]+)_(?:.+)\z}g) {
+			next SPECIES;
+		}
+		else {
+			my $delete_cnt = qq{
+			DELETE nr FROM $nr_cnt_tbl AS nr
+			WHERE species_name = '$taxon'
+	    	};
+	    	eval { $dbh->do($delete_cnt, { async => 1 } ) };
+			my $rows_del = $dbh->mysql_async_result;
+	    	$log->debug( "Action: table $nr_cnt_tbl deleted $rows_del rows for {$taxon}" ) unless $@;
+	    	$log->error( "Action: deleting $nr_cnt_tbl failed for {$taxon}: $@" ) if $@;
+
+		}
+	}
+
+
 
 	$dbh->disconnect;
 
@@ -3022,6 +3053,293 @@ sub del_virus_from_nr {
 	return;
 }
 
+### INTERFACE SUB ###
+# Usage      : del_nr_genomes( $param_href );
+# Purpose    : deletes species NR genomes that have subspecies or strain genomes (first step)
+# Returns    : nothing
+# Parameters : ( $param_href )
+# Throws     : croaks for parameters
+# Comments   : it works on nr set of genomes only (first step) from nr_ti_gi_cnt table
+# See Also   : del_total_genomes() ->second step
+sub del_nr_genomes {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak( 'del_nr_genomes() needs a $param_href' ) unless @_ == 1;
+    my ( $param_href ) = @_;
+
+	my $DATABASE = $param_href->{DATABASE}    or $log->logcroak( 'no $DATABASE specified on command line!' );
+    my %TABLES   = %{ $param_href->{TABLES} } or $log->logcroak('no $TABLES specified on command line!');
+    my $NR_CNT_TBL   = $TABLES{nr_cnt};
+			
+	#get new handle
+    my $dbh = dbi_connect($param_href);
+
+	#get all species names as array
+    my $species_query = qq{
+    SELECT species_name 
+    FROM $NR_CNT_TBL
+    ORDER BY species_name
+    };
+    my @species_names = map { $_->[0] } @{ $dbh->selectall_arrayref($species_query) };
+
+	say join("\n", @species_names);
+	#get count of genus if there is more than 1 (into hash)
+	my ($found_genus, %found_hash_cnt);
+	foreach my $species (@species_names) {
+		(my $genus = $species) =~ s/\A([^_]+)_(?:.+)\z/$1/g;
+		say "SPECIES:$species\tGENUS:$genus";
+
+		if ($genus eq $found_genus) {
+			$found_hash_cnt{$genus}++;   #add to hash only if found earlier (only duplicates)
+			#say "GENUS:$genus EQ FOUND:$found_genus";
+		}
+		$found_genus = $genus;   #now found has previous genus
+	}
+	#print Dumper(\%found_hash_cnt);
+	#$VAR1 = {
+	#          'Aphanomyces' => 1
+	#        };
+
+	#now get found species into HoHoA to display them later
+	my (%hohoa);
+	foreach my $species2 (@species_names) {
+		(my $genus2 = $species2) =~ s/\A([^_]+)_(?:.+)\z/$1/g;
+		#say "GENUS2:$genus2";
+		if (exists $found_hash_cnt{$genus2}) {
+			push @{ $hohoa{$genus2}{ $found_hash_cnt{$genus2} } }, $species2;   #created HoHoArrays
+
+		}
+	}	
+	#print Dumper(\%hohoa);
+	#$VAR1 = {
+	#          'Aphanomyces' => {
+	#                             '1' => [
+	#                                      'Aphanomyces_astaci',
+	#                                      'Aphanomyces_invadans'
+	#                                    ]
+	#                           }
+	#        };
+
+	#use HoHoA to display species to delete
+	while (my ($key, $inner_hash) = each (%hohoa)) {   #$inner_hash is a ref
+		say Dumper( $inner_hash);
+		#$VAR1 = {
+		#          '1' => [
+		#                   'Aphanomyces_astaci',
+		#                   'Aphanomyces_invadans'
+		#                 ]
+		#        };
+
+		INNER:
+		foreach my $cnt (keys %{$inner_hash} ) {
+			#say "$cnt: @{ $inner_hash->{$cnt}    }";
+
+			#first prompt to see if there is anything to delete (printed by Dumper earlier)
+			my $continue = prompt( "Delete? ", -yn1 );
+			say $continue;
+            if ( $continue eq 'y' ) {
+				#ask to choose species to delete
+				my $species_delete = prompt 'Choose which SPECIES you want to DELETE (single num)',
+				-menu => [ @{ $inner_hash->{$cnt} } ],
+				-number,
+				'>';
+				$log->trace( "DELETING: $species_delete" );
+
+				#DELETE species from nr_base_eu_cnt table (because it is species with strains present)
+				my $delete_species = qq{
+				DELETE nr FROM $NR_CNT_TBL AS nr
+				WHERE species_name = ('$species_delete');
+			    };
+			    eval { $dbh->do($delete_species, { async => 1 } ) };
+				my $rows_del_spec = $dbh->mysql_async_result;
+			    $log->debug( "Table $NR_CNT_TBL deleted $rows_del_spec rows with $species_delete" ) unless $@;
+			    $log->debug( "Deleting $NR_CNT_TBL failed: $@" ) if $@;
+
+				#prompt to redo loop (for multiple delete on same genus)
+				my $redo = prompt( "Redo?", -yns );
+				if ($redo eq 'y') {
+					redo INNER;
+				}
+				else {
+					next INNER;
+				}
+            }
+            elsif ($continue eq 'n') {
+				$log->trace( "In genus $key there is nothing to DELETE!" );
+                next INNER;
+            }
+		}
+	}
+
+	$dbh->disconnect;
+
+	return;
+}
+
+
+### INTERFACE SUB ###
+# Usage      : del_total_genomes( $param_href );
+# Purpose    : deletes TOTAL species genomes that have subspecies or strain genomes (second step)
+# Returns    : nothing
+# Parameters : ( $param_href )
+# Throws     : croaks for parameters
+# Comments   : first it creates ti_fulllist table to hold all genomes
+#            : it deletes genomes that have species and strain genomes in full dataset
+#            : (both nr and existing genomes)
+# See Also   : second step
+sub del_total_genomes {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak( 'del_total_genomes() needs a $param_href' ) unless @_ == 1;
+    my ( $param_href ) = @_;
+
+    my $ENGINE   = defined $param_href->{ENGINE} ? $param_href->{ENGINE} : 'InnoDB';
+    my $DATABASE = $param_href->{DATABASE}    or $log->logcroak('no $DATABASE specified on command line!');
+    my %TABLES   = %{ $param_href->{TABLES} } or $log->logcroak('no $TABLES specified on command line!');
+    my $NR_CNT_TBL   = $TABLES{nr_cnt};
+    my $TI_FILES_TBL = $TABLES{ti_files};
+			
+	#get new handle
+    my $dbh = dbi_connect($param_href);
+
+    #report what are you doing
+    $log->info( "---------->JOIN-ing two tables: $NR_CNT_TBL and $TI_FILES_TBL" );
+
+    #create table
+	my $table_list = "ti_fulllist";
+    my $create_query = qq{
+    CREATE TABLE $table_list (
+    ti INT UNSIGNED NOT NULL,
+    genes_cnt INT UNSIGNED NULL,
+	species_name VARCHAR(200) NULL,
+    PRIMARY KEY(ti),
+	KEY(genes_cnt),
+	KEY(species_name)
+    )ENGINE=$ENGINE CHARSET=ascii
+    };
+	create_table( { TABLE_NAME => $table_list, DBH => $dbh, QUERY => $create_query, %{$param_href} } );
+
+    my $insert_nr = qq{
+    INSERT INTO $table_list (ti, genes_cnt, species_name)
+    SELECT ti, genes_cnt, species_name
+    FROM $NR_CNT_TBL
+	ORDER BY ti
+    };
+    eval { $dbh->do($insert_nr, { async => 1 } ) };
+    my $rows = $dbh->mysql_async_result;
+    $log->debug( "Action: import inserted $rows rows!" ) unless $@;
+    $log->error( "Action: loading $table_list failed: $@" ) if $@;
+
+    my $insert_ti = qq{
+    INSERT INTO $table_list (ti, species_name)
+    SELECT ti, species_name
+	FROM $TI_FILES_TBL
+	ORDER BY ti
+    };
+    eval { $dbh->do($insert_ti, { async => 1 } ) };
+    my $rows2 = $dbh->mysql_async_result;
+    $log->debug( "Action: import inserted $rows2 rows!" ) unless $@;
+    $log->error( "Action: loading $table_list failed: $@" ) if $@;
+
+	#SECOND PART: remove superfluous genomes
+	#get all species names as array
+    my $species_query = qq{
+    SELECT species_name 
+    FROM $table_list
+    ORDER BY species_name
+    };
+    my @species_names = map { $_->[0] } @{ $dbh->selectall_arrayref($species_query) };
+
+	#get count of genus if there is more than 1 (into hash)
+	my ($found_genus, %found_hash_cnt);
+	foreach my $species (@species_names) {
+		(my $genus = $species) =~ s/\A([^_]+)_(?:.+)\z/$1/g;
+		#say "GENUS:$genus";
+
+		if ($genus eq $found_genus) {
+			$found_hash_cnt{$genus}++;   #does not track single species genera
+			#say "GENUS:$genus EQ FOUND:$found_genus";
+		}
+		$found_genus = $genus;   #now found has previous genus
+	}
+	#print Dumper(\%found_hash_cnt);
+	#$VAR1 = {
+	#          'Aphanomyces' => 1
+	#        };
+
+	#now get found species into HoHoA to display them later
+	my (%hohoa);
+	foreach my $species2 (@species_names) {
+		(my $genus2 = $species2) =~ s/\A([^_]+)_(?:.+)\z/$1/g;
+		#say "GENUS2:$genus2";
+		if (exists $found_hash_cnt{$genus2}) {
+			push @{ $hohoa{$genus2}{ $found_hash_cnt{$genus2} } }, $species2;   #created HoHoArrays
+		}
+	}	
+	#print Dumper(\%hohoa);
+	#$VAR1 = {
+	#          'Aphanomyces' => {
+	#                             '1' => [
+	#                                      'Aphanomyces_astaci',
+	#                                      'Aphanomyces_invadans'
+	#                                    ]
+	#                           }
+	#        };
+
+	#use HoHoA to display species to delete
+	while (my ($key, $inner_hash) = each (%hohoa)) {   #$inner_hash is a ref
+		say Dumper( $inner_hash);
+		#$VAR1 = {
+		#          '1' => [
+		#                   'Aphanomyces_astaci',
+		#                   'Aphanomyces_invadans'
+		#                 ]
+		#        };
+
+		INNER:
+		foreach my $cnt (keys %{$inner_hash} ) {
+			#say "$cnt: @{ $inner_hash->{$cnt}    }";
+
+			#first prompt to see if there is anything to delete
+			my $continue = prompt( "Delete? ", -yn1 );
+			say $continue;
+            if ( $continue eq 'y' ) {
+				#ask to choose species to delete
+				my $species_delete = prompt 'Choose which SPECIES you want to DELETE (single num)',
+				-menu => [ @{ $inner_hash->{$cnt} } ],
+				-number,
+				'>';
+				$log->trace( "DELETING: $species_delete" );
+
+				#DELETE species from ti_full_list table (because it has species with strains present)
+				#it accepts one num
+				my $delete_species = qq{
+				DELETE nr FROM $table_list AS nr
+				WHERE species_name = ('$species_delete')
+			    };
+			    eval { $dbh->do($delete_species, { async => 1 } ) };
+				my $rows_del_spec = $dbh->mysql_async_result;
+			    $log->debug( "Action: table $table_list deleted $rows_del_spec rows with $species_delete" ) unless $@;
+			    $log->error( "Action: deleting $NR_CNT_TBL failed: $@" ) if $@;
+				
+				#prompt to redo loop (for multiple delete on same genus)
+				my $redo = prompt( "Redo?", -yns );
+				if ($redo eq 'y') {
+					redo INNER;
+				}
+				else {
+					next INNER;
+				}
+            }
+            elsif ($continue eq 'n') {
+				$log->trace( "In genus $key there is nothing to DELETE!" );
+                next INNER;
+            }
+		}
+	}
+
+	$dbh->disconnect;
+
+	return;
+}
 
 
 
@@ -3097,16 +3415,12 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
 
  perl ./lib/CollectGenomes.pm --mode=get_missing_genomes --tables nr_cnt=nr_ti_gi_fasta_InnoDB_cnt -tbl ti_files=ti_files -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=InnoDB
 
+ perl ./lib/CollectGenomes.pm --mode=del_nr_genomes -tbl nr_cnt=nr_ti_gi_fasta_InnoDB_cnt -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+
+ perl ./lib/CollectGenomes.pm --mode=del_total_genomes -tbl nr_cnt=nr_ti_gi_fasta_InnoDB_cnt -tbl ti_files=ti_files -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625n=InnoDB
 
 
-
- perl ./bin/CollectGenomes.pm --mode=get_existing_ti --in=./t_eukarya/ -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
-
- perl ./bin/CollectGenomes.pm --mode=get_missing_genomes --in=. -ho localhost -d nr -u msandbox -p msandbox -po 5622 -s /tmp/mysql_sandbox5622.sock
-
- perl ./bin/CollectGenomes.pm --mode=delete_extra_genomes --in=. -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
-
- perl ./bin/CollectGenomes.pm --mode=delete_full_genomes --in=. -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ perl ./bin/CollectGenomes.pm --mode=del_total_genomes --in=. -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
  perl ./bin/CollectGenomes.pm --mode=print_nr_genomes --out=/home/msestak/dropbox/Databases/db_29_07_15/data/eukarya/ -ho localhost -d nr -u msandbox -p msandbox -po 5622 -s /tmp/mysql_sandbox5622.sock
 
@@ -3145,8 +3459,8 @@ Possible modes:
  import_names                  => \&import_names,
  import_nodes                  => \&import_nodes,
  get_missing_genomes           => \&get_missing_genomes,
- delete_extra_genomes          => \&delete_extra_genomes,
- delete_full_genomes           => \&delete_full_genomes,
+ del_nr_genomes          => \&del_nr_genomes,
+ del_total_genomes           => \&del_total_genomes,
  print_nr_genomes              => \&print_nr_genomes,
  copy_existing_genomes         => \&copy_existing_genomes,
  ensembl_vertebrates           => \&ensembl_vertebrates,
