@@ -2668,7 +2668,7 @@ sub nr_genome_counts {
     )ENGINE=$ENGINE CHARSET=ascii }, $dbh->quote_identifier($nr_cnt_tbl) );
 	create_table( { TABLE_NAME => $nr_cnt_tbl, DBH => $dbh, QUERY => $create_query_cnt, %{$param_href} } );
 
-	#INSERT all eukaryotes
+	#INSERT all species
     my $insert_query_cnt = qq{
     INSERT INTO $nr_cnt_tbl (ti, genes_cnt)
     SELECT ti, COUNT(ti) AS genes_cnt
@@ -2871,17 +2871,22 @@ sub get_existing_ti {
     $log->error( "Action: updating $table_ti failed: $@" ) if $@;
     $log->debug( "Action: table $table_ti updated successfully!" ) unless $@;
 
-	#update for Hydra magnipapillata
-	my $update_hydra = qq{
-	UPDATE $table_ti
-	SET species_name = 'Hydra magnipapillata'
-	WHERE ti = 6085
-	};
-	eval { $dbh->do($update_hydra, { async => 1 } ) };
-	my $rows_h = $dbh->mysql_async_result;
-    $log->debug( "Action: update to $table_ti updated $rows_h rows!" );
-    $log->error( "Action: updating $table_ti failed: $@" ) if $@;
-    $log->debug( "Action: table $table_ti updated successfully!" ) unless $@;
+	#update for Hydra magnipapillata and Caenorhabditis briggsae
+    my %species = (
+        473542 => 'Caenorhabditis briggsae',
+        6085   => 'Hydra magnipapillata',
+    );
+	while (my ($ti, $species_name) = each %species) {
+		my $update_q = qq{
+		UPDATE $table_ti
+		SET species_name = '$species_name'
+		WHERE ti = $ti
+		};
+		eval { $dbh->do($update_q, { async => 1 } ) };
+		my $rows_up = $dbh->mysql_async_result;
+    	$log->debug( "Action: update to $table_ti for $species_name updated $rows_up rows!" ) unless $@;
+    	$log->error( "Action: updating $table_ti for $species_name failed: $@" ) if $@;
+	}
 
 	$dbh->disconnect;
 
@@ -2954,6 +2959,10 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
  perl ./lib/CollectGenomes.pm --mode=export_all_nr_genomes -o ./nr/ --tables nr=nr_ti_gi_fasta_InnoDB_cnt -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v
 
  Part VI -> combine nr genomes with Ensembl genomes and prin them out:
+
+ perl ./lib/CollectGenomes.pm --mode=get_existing_ti --in=./ensembl_ftp/ --tables names=names_martin7 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+
+
 
  perl ./bin/CollectGenomes.pm --mode=get_existing_ti --in=./t_eukarya/ -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
