@@ -42,6 +42,7 @@ our @EXPORT_OK = qw{
 	ftp_robust
 	extract_and_load_nr
     extract_and_load_gi_taxid
+	del_virus_from_nr
 	ti_gi_fasta
 	get_existing_ti
 	import_names
@@ -123,6 +124,7 @@ sub main {
         load_nr                       => \&load_nr,
         extract_and_load_nr           => \&extract_and_load_nr,
         gi_taxid                      => \&extract_and_load_gi_taxid,
+		del_virus_from_nr             => \&del_virus_from_nr,
         import_names                  => \&import_names,
         import_nodes                  => \&import_nodes,
         ti_gi_fasta                   => \&ti_gi_fasta,
@@ -2950,6 +2952,55 @@ sub get_missing_genomes {
 	return;
 }
 
+### INTERFACE SUB ###
+# Usage      : del_virus_from_nr( $param_href );
+# Purpose    : deletes viroids, viruses, other and unclassified sequences from gi_ti or nr_ti_gi tables
+# Returns    : nothing
+# Parameters : ( $param_href )
+# Throws     : croaks for parameters
+# Comments   : it needs phylo tables for these sequences created by call_phylo (and friends)
+# See Also   : call_phylo()
+sub del_virus_from_nr {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak( 'del_virus_from_nr() needs a $param_href' ) unless @_ == 1;
+    my ( $param_href ) = @_;
+
+    my $ENGINE   = defined $param_href->{ENGINE} ? $param_href->{ENGINE} : 'InnoDB';
+    my $DATABASE = $param_href->{DATABASE} or $log->logcroak('no $DATABASE specified on command line!');
+    my %TABLES   = %{ $param_href->{TABLES} } or $log->logcroak('no $TABLES specified on command line!');
+    my $NR_TBL   = $TABLES{nr};
+
+    #get new handle
+    my $dbh = dbi_connect($param_href);
+
+	#DELETE nr table based on phylo tables of viruses, viroids,other and unclassified sequences
+    my %tis_to_del = (
+        12884 => 'Viroids',
+        10239 => 'Viruses',
+        28384 => 'other sequences',
+        12809 => 'unclassified sequences',
+    );
+
+	while (my ($ti, $division) = each %tis_to_del) {
+
+		my $phylo_tbl = 'phylo_' . $ti;
+
+		my $delete_cnt = qq{
+		DELETE nr FROM $NR_TBL AS nr
+		INNER JOIN $phylo_tbl AS ph
+		ON nr.ti = ph.ti
+    	};
+    	eval { $dbh->do($delete_cnt, { async => 1 } ) };
+		my $rows_del = $dbh->mysql_async_result;
+    	$log->debug( "Table $NR_TBL deleted $rows_del rows for {$division}" ) unless $@;
+    	$log->error( "Deleting $NR_TBL failed for {$division}: $@" ) if $@;
+	}
+
+	$dbh->disconnect;
+
+	return;
+}
+
 
 
 
@@ -2993,6 +3044,8 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
 
  perl ./lib/CollectGenomes.pm --mode=gi_taxid -if ./nr/gi_taxid_prot.dmp.gz -o ./nr/ -ho localhost -u msandbox -p msandbox -d nr --port=5625 --socket=/tmp/mysql_sandbox5625.sock --engine=InnoDB
 
+ perl ./lib/CollectGenomes.pm -mode=del_virus_from_nr -tbl nr=gi_taxid_prot_TokuDB -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v
+
  perl ./lib/CollectGenomes.pm --mode=ti_gi_fasta -d nr -ho localhost -u msandbox -p msandbox --port=5625 --socket=/tmp/mysql_sandbox5625.sock --engine=InnoDB
 
  perl ./lib/CollectGenomes.pm --mode=mysqldump -o ./t/nr -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
@@ -3005,6 +3058,11 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
 
  perl ./lib/CollectGenomes.pm -mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_martin7 -t 2759 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
  perl ./lib/CollectGenomes.pm -mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_martin7 -t 7955 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v --engine=InnoDB
+
+ (Viroids:12884)=perl ./lib/CollectGenomes.pm -mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_martin7 -t 12884 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v --engine=TokuDB
+ (Viruses:10239)=perl ./lib/CollectGenomes.pm -mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_martin7 -t 10239 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v --engine=TokuDB
+ (Other:28384)=perl ./lib/CollectGenomes.pm -mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_martin7 -t 28384 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v --engine=TokuDB
+ (unclassified:12908)=perl ./lib/CollectGenomes.pm -mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_martin7 -t 12908 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v --engine=TokuDB
 
  Part V -> get genomes from nr base:
 
