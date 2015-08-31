@@ -2978,7 +2978,7 @@ sub del_virus_from_nr {
         12884 => 'Viroids',
         10239 => 'Viruses',
         28384 => 'other sequences',
-        12809 => 'unclassified sequences',
+        12908 => 'unclassified sequences',
     );
 
 	while (my ($ti, $division) = each %tis_to_del) {
@@ -2988,9 +2988,30 @@ sub del_virus_from_nr {
 		my $delete_cnt = qq{
 		DELETE nr FROM $NR_TBL AS nr
 		INNER JOIN $phylo_tbl AS ph
-		ON nr.ti = ph.ti
+		ON nr.ti = ph.ps1
     	};
     	eval { $dbh->do($delete_cnt, { async => 1 } ) };
+
+		#check status while running
+		{    
+    	    my $dbh_check         = dbi_connect($param_href);
+    	    until ( $dbh->mysql_async_ready ) {
+    	        my $processlist_query = qq{
+    	        SELECT TIME, STATE FROM INFORMATION_SCHEMA.PROCESSLIST
+    	        WHERE DB = ? AND INFO LIKE 'DELETE%';
+    	        };
+    	        my $sth = $dbh_check->prepare($processlist_query);
+    	        $sth->execute($DATABASE);
+    	        my ( $time, $state );
+    	        $sth->bind_columns( \( $time, $state ) );
+    	        while ( $sth->fetchrow_arrayref ) {
+    	            my $process = sprintf( "Time running:%0.3f sec\tSTATE:%s\n", $time, $state );
+    	            $log->trace( $process );
+    	            sleep 10;
+    	        }
+    	    }
+    	}    #end check
+
 		my $rows_del = $dbh->mysql_async_result;
     	$log->debug( "Table $NR_TBL deleted $rows_del rows for {$division}" ) unless $@;
     	$log->error( "Deleting $NR_TBL failed for {$division}: $@" ) if $@;
