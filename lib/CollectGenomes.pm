@@ -2600,7 +2600,6 @@ sub nr_genome_counts {
 
     my $ENGINE = defined $param_href->{ENGINE} ? $param_href->{ENGINE} : 'InnoDB';
 	my $DATABASE = $param_href->{DATABASE} or $log->logcroak( 'no $DATABASE specified on command line!' );
-	my $TABLE    = $param_href->{TABLE};   #optional (can come from prompt too)
     my %TABLES   = %{ $param_href->{TABLES} };
 	my $NR_TABLE = $TABLES{nr};
 	my $NAMES_TABLE = $TABLES{names};
@@ -2676,11 +2675,29 @@ sub nr_genome_counts {
 	GROUP BY ti
     };
     eval { $dbh->do($insert_query_cnt, { async => 1 } ) };
-	my $rows_cnt = $dbh->mysql_async_result;
-    $log->debug( "Action: import to $nr_cnt_tbl inserted $rows_cnt rows!" );
 
+    #check status while running
+    {    
+        my $dbh_check         = dbi_connect($param_href);
+        until ( $dbh->mysql_async_ready ) {
+            my $processlist_query = qq{
+            SELECT TIME, STATE FROM INFORMATION_SCHEMA.PROCESSLIST
+            WHERE DB = ? AND INFO LIKE 'INSERT%';
+            };
+            my $sth = $dbh_check->prepare($processlist_query);
+            $sth->execute($DATABASE);
+            my ( $time, $state );
+            $sth->bind_columns( \( $time, $state ) );
+            while ( $sth->fetchrow_arrayref ) {
+                my $process = sprintf( "Time running:%0.3f sec\tSTATE:%s\n", $time, $state );
+                $log->trace( $process );
+                sleep 10;
+            }
+        }
+    }    #end check
+	my $rows_cnt = $dbh->mysql_async_result;
+    $log->debug( "Action: import to $nr_cnt_tbl inserted $rows_cnt rows!" ) unless $@;
     $log->error( "Action: loading $nr_cnt_tbl failed: $@" ) if $@;
-    $log->debug( "Action: table $nr_cnt_tbl inserted successfully!" ) unless $@;
 
 	#UPDATE with species_names
     my $update_query_cnt = qq{
@@ -2895,6 +2912,43 @@ sub get_existing_ti {
 }
 
 
+### INTERFACE SUB ###
+# Usage      : get_missing_genomes( $param_href );
+# Purpose    : JOINs existing tis with all possible tis from nr_base (ti, gi, fasta)
+# Returns    : nothing
+# Parameters : ( $param_href )
+# Throws     : croaks for parameters
+# Comments   : 
+# See Also   : 
+sub get_missing_genomes {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak( 'get_missing_genomes() needs a $param_href' ) unless @_ == 1;
+    my ( $param_href ) = @_;
+
+    my $ENGINE       = defined $param_href->{ENGINE} ? $param_href->{ENGINE} : 'InnoDB';
+    my $DATABASE     = $param_href->{DATABASE} or $log->logcroak('no $DATABASE specified on command line!');
+    my %TABLES       = %{ $param_href->{TABLES} };
+    my $NR_CNT_TBL   = $TABLES{nr_cnt};
+    my $TI_FILES_TBL = $TABLES{ti_files};
+
+    #get new handle
+    my $dbh = dbi_connect($param_href);
+
+	#DELETE genomes already present in database
+	my $delete_cnt = qq{
+	DELETE nr FROM $NR_CNT_TBL AS nr
+	INNER JOIN $TI_FILES_TBL AS ti
+	ON nr.ti = ti.ti
+    };
+    eval { $dbh->do($delete_cnt, { async => 1 } ) };
+	my $rows_del = $dbh->mysql_async_result;
+    $log->debug( "Table $NR_CNT_TBL deleted $rows_del rows!" ) unless $@;
+    $log->error( "Deleting $NR_CNT_TBL failed: $@" ) if $@;
+
+	$dbh->disconnect;
+
+	return;
+}
 
 
 
@@ -2954,13 +3008,16 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
 
  Part V -> get genomes from nr base:
 
- perl ./lib/CollectGenomes.pm --mode=nr_genome_counts --tables nr=nr_ti_gi_fasta_InnoDB --tables names=names_martin7 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ perl ./lib/CollectGenomes.pm --mode=nr_genome_counts --tables nr=nr_ti_gi_fasta_InnoDB --tables names=names_martin7 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=InnoDB
 
  perl ./lib/CollectGenomes.pm --mode=export_all_nr_genomes -o ./nr/ --tables nr=nr_ti_gi_fasta_InnoDB_cnt -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v
 
  Part VI -> combine nr genomes with Ensembl genomes and prin them out:
 
- perl ./lib/CollectGenomes.pm --mode=get_existing_ti --in=./ensembl_ftp/ --tables names=names_martin7 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ perl ./lib/CollectGenomes.pm --mode=get_existing_ti --in=./ensembl_ftp/ --tables names=names_martin7 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -en=InnoDB
+
+ perl ./lib/CollectGenomes.pm --mode=get_missing_genomes --tables nr_cnt=nr_ti_gi_fasta_InnoDB_cnt -tbl ti_files=ti_files -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=InnoDB
+
 
 
 
