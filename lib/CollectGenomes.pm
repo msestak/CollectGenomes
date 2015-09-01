@@ -2856,6 +2856,7 @@ sub get_existing_ti {
 
     my $ENGINE = defined $param_href->{ENGINE} ? $param_href->{ENGINE} : 'InnoDB';
     my $IN       = $param_href->{IN}       or $log->logcroak('no $IN specified on command line!');
+    my $OUT      = $param_href->{OUT}      or $log->logcroak('no $OUT specified on command line!');
     my $DATABASE = $param_href->{DATABASE} or $log->logcroak('no $DATABASE specified on command line!');
     my %TABLES   = %{ $param_href->{TABLES} };
     my $NAMES_TABLE = $TABLES{names};
@@ -2870,6 +2871,13 @@ sub get_existing_ti {
 		push @tis, $ti;
 	}
 	my @tis_sorted = sort {$a <=> $b} @tis;
+
+	#print to file for MakeTree
+	my $ti_files_path = path($OUT, 'ti_files');
+	open my $ti_fh, ">:encoding(ASCII)", $ti_files_path or $log->logdie("Error: can't write to $ti_files_path:$!");
+	foreach (@tis_sorted) {
+		say {$ti_fh} $_;
+	}
 
 	#get new database handle
 	my $dbh = dbi_connect($param_href);
@@ -2915,6 +2923,26 @@ sub get_existing_ti {
         }
     }
 
+	#species with changed tax_ids
+	my %sp_changed = (
+		#473542 => 'Caenorhabditis briggsae',
+		245018 => 649756,
+		1525716 => 1545044,
+		#1525718 => 1545044,
+		473542   => 6238
+	);
+	while (my ($old_ti, $new_ti) = each %sp_changed) {
+		my $update_ch = qq{
+		UPDATE $table_ti
+		SET ti = $new_ti
+		WHERE ti = $old_ti
+		};
+		eval { $dbh->do($update_ch, { async => 1 } ) };
+		my $rows_ch = $dbh->mysql_async_result;
+    	$log->debug( "Action: update to $table_ti for $old_ti to $new_ti updated $rows_ch rows!" ) unless $@;
+    	$log->error( "Action: updating $table_ti for for $old_ti to $new_ti failed: $@" ) if $@;
+	}
+
 	#UPDATE with species_names
 	$dbh->{AutoCommit} = 1;    # disable transactions
     my $update_query = qq{
@@ -2924,17 +2952,18 @@ sub get_existing_ti {
     };
     eval { $dbh->do($update_query, { async => 1 } ) };
 	my $rows = $dbh->mysql_async_result;
-    $log->debug( "Action: update to $table_ti updated $rows rows!" );
+    $log->debug( "Action: update to $table_ti updated $rows rows!" ) unless $@;
 
     $log->error( "Action: updating $table_ti failed: $@" ) if $@;
     $log->debug( "Action: table $table_ti updated successfully!" ) unless $@;
 
-	#update for Hydra magnipapillata and Caenorhabditis briggsae
-    my %species = (
-        473542 => 'Caenorhabditis briggsae',
-        6085   => 'Hydra magnipapillata',
+	#update for Hydra magnipapillata
+	#species_excluded from NCBI but present in our db
+    my %sp_ex_ncbi = (
+        6085    => 'Hydra magnipapillata',
+        1525718 => 'Paracoccus_sp ._39524',
     );
-	while (my ($ti, $species_name) = each %species) {
+	while (my ($ti, $species_name) = each %sp_ex_ncbi) {
 		my $update_q = qq{
 		UPDATE $table_ti
 		SET species_name = '$species_name'
@@ -2945,6 +2974,8 @@ sub get_existing_ti {
     	$log->debug( "Action: update to $table_ti for $species_name updated $rows_up rows!" ) unless $@;
     	$log->error( "Action: updating $table_ti for $species_name failed: $@" ) if $@;
 	}
+
+
 
 	$dbh->disconnect;
 
@@ -3462,11 +3493,12 @@ sub import_raw_names {
             my ( $ti, $species_name, $species_synonym, $name_type )
               = split( /\t\|\t/, $_ );    #$_ is default for split and first argument to split is regex//
             $species_synonym = '~' if $species_synonym eq '';    #third column usually empty
-            next NAMES if $name_type ne 'scientific name';       #ignore all other names
+			#next NAMES if $name_type ne 'scientific name';       #ignore all other names
 
             #format what you selected (Robert's underscores)
-            $name_type = 'scientific_name';
-            $species_name =~ tr/ /_/;
+            $species_name    =~ tr/ /_/;
+            $species_synonym =~ tr/ /_/;
+            $name_type       =~ tr/ /_/;
 
             print {$names_out_fh} "$ti\t$species_name\t$species_synonym\t$name_type\n";
             $sth->execute( $ti, $species_name, $species_synonym, $name_type );
@@ -3485,6 +3517,7 @@ sub import_raw_names {
 # Parameters : ( $param_href )
 # Throws     : croaks for parameters
 # Comments   : it tries to emulate Robert's work and format
+#            : it removes Phages, viruses, Synthetic and Environmental samples
 # See Also   :
 sub import_raw_nodes {
     my $log = Log::Log4perl::get_logger("main");
@@ -3551,9 +3584,9 @@ sub import_raw_nodes {
 			#root problems
 			if (($ti == 1) and ($parent_ti == 1)) {
 				$log->trace("Action: working on root!");
-				print {$nodes_out_fh} "$ti\t$parent_ti\n";
-				my $false_parent = 100_000_000;
-				$sth->execute( $ti, $false_parent, $division_id );
+				#print {$nodes_out_fh} "$ti\t$parent_ti\n";
+				#my $false_parent = 100_000_000;
+				#$sth->execute( $ti, $false_parent, $division_id );
 				next NODES;
 			}
 
@@ -3623,7 +3656,7 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
  Part IV -> set phylogeny for focal species:
 
  perl ./lib/CollectGenomes.pm --mode=import_names -if ./nr/names_martin7 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=InnoDB
- perl ./lib/CollectGenomes.pm --mode=import_raw_names -if ./t/nr/taxdump/names.dmp -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=InnoDB
+ perl ./lib/CollectGenomes.pm --mode=import_raw_names -if ./t/nr/taxdump/names.dmp -o ./t/nr/ -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=InnoDB
 
  perl ./lib/CollectGenomes.pm --mode=import_nodes -if ./nr/nodes_martin7 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=InnoDB
  perl ./lib/CollectGenomes.pm --mode=import_raw_nodes -if ./t/nr/taxdump/nodes.dmp -o ./t/nr/ -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=InnoDB
