@@ -3394,7 +3394,7 @@ sub del_total_genomes {
 # Returns    : nothing
 # Parameters : ( $param_href )
 # Throws     : croaks for parameters
-# Comments   : it tries to emulate Robert's work and format (tilda in 3rd column)
+# Comments   : it tries to emulate Robert's work and format (tilda in 3rd column and underscores in species_name)
 # See Also   :
 sub import_raw_names {
     my $log = Log::Log4perl::get_logger("main");
@@ -3402,18 +3402,20 @@ sub import_raw_names {
     my ($param_href) = @_;
 
     my $INFILE   = $param_href->{INFILE}   or $log->logcroak('no $INFILE specified on command line!');
+    my $OUT      = $param_href->{OUT}      or $log->logcroak('no $OUT specified on command line!');
     my $DATABASE = $param_href->{DATABASE} or $log->logcroak('no $DATABASE specified on command line!');
     my $ENGINE = defined $param_href->{ENGINE} ? $param_href->{ENGINE} : 'InnoDB';
     my $table = path($INFILE)->basename;
-	$table =~ tr/./_/;    #for files that have dots in name
+    $table =~ tr/./_/;    #for files that have dots in name
 
     #get new handle
     my $dbh = dbi_connect($param_href);
 
-	#report what are you doing
-	$log->info("Report:---------->Importing names:$table");
-	
-	my $create_query = sprintf( qq{
+    #report what are you doing
+    $log->info("Report:---------->Importing names:$table");
+
+    my $create_query = sprintf(
+        qq{
 	CREATE TABLE %s (
 	id INT UNSIGNED AUTO_INCREMENT NOT NULL,
 	ti INT UNSIGNED NOT NULL,
@@ -3423,113 +3425,149 @@ sub import_raw_names {
 	PRIMARY KEY(id, ti),
 	KEY(ti),
 	KEY(species_name)
-	)ENGINE=$ENGINE CHARACTER SET=ascii }, $dbh->quote_identifier($table) );
-	create_table( { TABLE_NAME => $table, DBH => $dbh, QUERY => $create_query, %{$param_href} } );
-	$log->trace("Report: $create_query");
+	)ENGINE=$ENGINE CHARACTER SET=ascii }, $dbh->quote_identifier($table)
+    );
+    create_table( { TABLE_NAME => $table, DBH => $dbh, QUERY => $create_query, %{$param_href} } );
+    $log->trace("Report: $create_query");
 
-	#Perl change table
-	open my $names_fh, "<:encoding(ASCII)", $INFILE or $log->logdie("Error: can't open $INFILE:$!");
-	
-	{
-		#prepare SQL for insert
-		my @columns = qw/ti species_name species_synonym name_type/;
-		my $columnlist = join (", ", @columns);
-		my $column_placeholders = join(", ", map{'?'} @columns);
+    #need to change format of names.dmp (print it and load it to MySQL)
+    #get name with date
+    my $now       = DateTime::Tiny->now;
+    my $date      = $now->year . '_' . $now->month . '_' . $now->day;
+    my $names_out = 'names_raw_' . $date;
+    $names_out = path( $OUT, $names_out );
 
-		my $insert = qq{
+    open my $names_fh,     "<:encoding(ASCII)", $INFILE    or $log->logdie("Error: can't open $INFILE:$!");
+    open my $names_out_fh, ">:encoding(ASCII)", $names_out or $log->logdie("Error: can't write to $names_out:$!");
+
+    {
+        #prepare SQL for insert
+        my @columns             = qw/ti species_name species_synonym name_type/;
+        my $columnlist          = join( ", ", @columns );
+        my $column_placeholders = join( ", ", map {'?'} @columns );
+
+        my $insert = qq{
 			INSERT INTO $table ($columnlist)
 			VALUES ( $column_placeholders)
 			};
-		my $sth = $dbh->prepare($insert);
+        my $sth = $dbh->prepare($insert);
 
-		#reading part
-		local $/ = "\t\|\n";
-		NAMES:
-		while (<$names_fh>) {
-			chomp;
-			#select what to use
-			my ($ti, $species_name, $species_synonym, $name_type) = split(/\t\|\t/, $_);   #$_ is default for split and #first argument to split is regex//
-			$species_synonym = '~' if $species_synonym eq '';                              #third column usually empty
-			next NAMES if $name_type ne 'scientific name';                                 #ignore all other names
-			
-			#format what you selected (Robert's underscores)
-			$name_type = 'scientific_name';
-			$species_name =~ tr/ /_/;
+        #reading part
+        local $/ = "\t\|\n";
+      NAMES:
+        while (<$names_fh>) {
+            chomp;
 
-			#print "{$ti}{$species_name}{$species_synonym}{$name_type}\n";
-			$sth->execute($ti, $species_name, $species_synonym, $name_type);
+            #select what to use
+            my ( $ti, $species_name, $species_synonym, $name_type )
+              = split( /\t\|\t/, $_ );    #$_ is default for split and first argument to split is regex//
+            $species_synonym = '~' if $species_synonym eq '';    #third column usually empty
+            next NAMES if $name_type ne 'scientific name';       #ignore all other names
 
-			#exit(0) if $. > 111;
-		}
-	}
-	
+            #format what you selected (Robert's underscores)
+            $name_type = 'scientific_name';
+            $species_name =~ tr/ /_/;
+
+            print {$names_out_fh} "$ti\t$species_name\t$species_synonym\t$name_type\n";
+            $sth->execute( $ti, $species_name, $species_synonym, $name_type );
+
+            #exit(0) if $. > 111;
+        }
+    }   #end block and end of local $/
+
     return;
 }
 
 ### INTERFACE SUB ###
 # Usage      : import_raw_nodes( $param_href );
-# Purpose    : loads nodes.tsv.updated to MySQL
+# Purpose    : loads raw nodes.dmp from NCBI to MySQL
 # Returns    : nothing
 # Parameters : ( $param_href )
 # Throws     : croaks for parameters
-# Comments   : new format with tabs
+# Comments   : it tries to emulate Robert's work and format
 # See Also   :
 sub import_raw_nodes {
     my $log = Log::Log4perl::get_logger("main");
-    $log->logcroak ('import_raw_nodes() needs a hash_ref' ) unless @_ == 1;
+    $log->logcroak('import_raw_nodes() needs a hash_ref') unless @_ == 1;
     my ($param_href) = @_;
 
-	my $INFILE   = $param_href->{INFILE}      or $log->logcroak( 'no $INFILE specified on command line!' );
-	my $DATABASE = $param_href->{DATABASE}    or $log->logcroak( 'no $DATABASE specified on command line!' );
+    my $INFILE   = $param_href->{INFILE}   or $log->logcroak('no $INFILE specified on command line!');
+    my $OUT      = $param_href->{OUT}      or $log->logcroak('no $OUT specified on command line!');
+    my $DATABASE = $param_href->{DATABASE} or $log->logcroak('no $DATABASE specified on command line!');
     my $ENGINE = defined $param_href->{ENGINE} ? $param_href->{ENGINE} : 'InnoDB';
-    my $table    = path($INFILE)->basename;
-    $table =~ s/\./_/g;    #for files that have dots in name)
+    my $table = path($INFILE)->basename;
+    $table =~ tr/./_/;    #for files that have dots in name
 
     #get new handle
     my $dbh = dbi_connect($param_href);
 
     #report what are you doing
-    $log->info( "---------->Importing nodes $table" );
-    my $create_query = sprintf( qq{
+    $log->info("---------->Importing nodes $table");
+    my $create_query = sprintf(
+        qq{
     CREATE TABLE IF NOT EXISTS %s (
     ti INT UNSIGNED NOT NULL,
     parent_ti INT UNSIGNED NOT NULL,
+	division_id TINYINT UNSIGNED NOT NULL,
     PRIMARY KEY(ti),
-    KEY(parent_ti)
-    )ENGINE=$ENGINE CHARACTER SET=ascii }, $dbh->quote_identifier($table) );
-	create_table( { TABLE_NAME => $table, DBH => $dbh, QUERY => $create_query, %{$param_href} } );
+    KEY(parent_ti),
+	KEY(division_id)
+    )ENGINE=$ENGINE CHARACTER SET=ascii }, $dbh->quote_identifier($table)
+    );
+    create_table( { TABLE_NAME => $table, DBH => $dbh, QUERY => $create_query, %{$param_href} } );
 
-    #import table
-    my $load_query = qq{
-    LOAD DATA INFILE '$INFILE'
-    INTO TABLE $table } . q{ FIELDS TERMINATED BY '\t'
-    LINES TERMINATED BY '\n' 
-    };
-    eval { $dbh->do( $load_query, { async => 1 } ) };
+    #need to change format of nodes.dmp (print it and load it to MySQL)
+    #get name with date
+    my $now       = DateTime::Tiny->now;
+    my $date      = $now->year . '_' . $now->month . '_' . $now->day;
+    my $nodes_out = 'nodes_raw_' . $date;
+    $nodes_out = path( $OUT, $nodes_out );
 
-    #check status while running
-    my $dbh_check             = dbi_connect($param_href);
-    until ( $dbh->mysql_async_ready ) {
-        my $processlist_query = qq{
-        SELECT TIME, STATE FROM INFORMATION_SCHEMA.PROCESSLIST
-        WHERE DB = ? AND INFO LIKE 'LOAD DATA INFILE%';
-        };
-        my ( $time, $state );
-        my $sth = $dbh_check->prepare($processlist_query);
-        $sth->execute($DATABASE);
-        $sth->bind_columns( \( $time, $state ) );
-        while ( $sth->fetchrow_arrayref ) {
-            my $process = sprintf( "Time running:%0.3f sec\tSTATE:%s\n", $time, $state );
-            $log->trace( $process );
-            sleep 1;
+    open my $nodes_fh,     "<:encoding(ASCII)", $INFILE    or $log->logdie("Error: can't open $INFILE:$!");
+    open my $nodes_out_fh, ">:encoding(ASCII)", $nodes_out or $log->logdie("Error: can't write to $nodes_out:$!");
+
+    {
+        #prepare SQL for insert
+        my @columns             = qw/ti parent_ti division_id/;
+        my $columnlist          = join( ", ", @columns );
+        my $column_placeholders = join( ", ", map {'?'} @columns );
+
+        my $insert = qq{
+			INSERT INTO $table ($columnlist)
+			VALUES ( $column_placeholders)
+			};
+        my $sth = $dbh->prepare($insert);
+
+        #reading part
+        local $/ = "\t\|\n";
+      NODES:
+        while (<$nodes_fh>) {
+            chomp;
+
+            #select what to use
+            my ( $ti, $parent_ti, undef, undef, $division_id, undef, undef, undef, undef, undef, undef, undef, undef )
+              = split( /\t\|\t/, $_ );    #$_ is default for split and first argument to split is regex//
+
+			#root problems
+			if (($ti == 1) and ($parent_ti == 1)) {
+				$log->trace("Action: working on root!");
+				print {$nodes_out_fh} "$ti\t$parent_ti\n";
+				my $false_parent = 100_000_000;
+				$sth->execute( $ti, $false_parent, $division_id );
+				next NODES;
+			}
+
+			#skip divisions:Viruses, synthetic, environmental
+			foreach ($division_id) {
+				when (3)  {next NODES;}   #Phages
+				when (7)  {next NODES;}   #Synthetic
+				when (9)  {next NODES;}   #Viruses
+				when (11) {next NODES;}   #Environmental samples
+			}
+            print {$nodes_out_fh} "$ti\t$parent_ti\n";
+            $sth->execute( $ti, $parent_ti, $division_id );
         }
-    }
-    my $rows = $dbh->mysql_async_result;
-    $log->trace( "Report: import inserted $rows rows!" );
-
-    #report success or failure
-    $log->error( "Report: loading $table failed: $@" ) if $@;
-    $log->debug( "Report: table $table loaded successfully!" ) unless $@;
+    }    #end block and end of local $/
 
     return;
 }
@@ -3588,6 +3626,7 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
  perl ./lib/CollectGenomes.pm --mode=import_raw_names -if ./t/nr/taxdump/names.dmp -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=InnoDB
 
  perl ./lib/CollectGenomes.pm --mode=import_nodes -if ./nr/nodes_martin7 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=InnoDB
+ perl ./lib/CollectGenomes.pm --mode=import_raw_nodes -if ./t/nr/taxdump/nodes.dmp -o ./t/nr/ -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=InnoDB
 
  perl ./lib/CollectGenomes.pm -mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_martin7 -t 2759 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
  perl ./lib/CollectGenomes.pm -mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_martin7 -t 7955 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v --engine=InnoDB
