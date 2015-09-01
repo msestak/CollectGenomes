@@ -2712,6 +2712,8 @@ sub nr_genome_counts {
     $log->debug( "Action: update to $nr_cnt_tbl updated $rows_up rows!" ) unless $@;
     $log->error( "Action: updating $nr_cnt_tbl failed: $@" ) if $@;
 
+	sleep 1;
+
 	#delete all names with single part (genus, division, ...) and keep species names Homo_sapiens
 	#first get all species_names
 	my $species_query = qq{
@@ -3012,80 +3014,80 @@ sub del_virus_from_nr {
         12908 => 'unclassified sequences',
     );
 
-	#	while (my ($ti, $division) = each %tis_to_del) {
-	#
-	#		my $phylo_tbl = 'phylo_' . $ti;
-	#
-	#		my $delete_cnt = qq{
-	#		DELETE nr FROM $NR_TBL AS nr
-	#		INNER JOIN $phylo_tbl AS ph
-	#		ON nr.ti = ph.ps1
-	#    	};
-	#    	eval { $dbh->do($delete_cnt, { async => 1 } ) };
-	#
-	#		#check status while running
-	#		{    
-	#    	    my $dbh_check         = dbi_connect($param_href);
-	#    	    until ( $dbh->mysql_async_ready ) {
-	#    	        my $processlist_query = qq{
-	#    	        SELECT TIME, STATE FROM INFORMATION_SCHEMA.PROCESSLIST
-	#    	        WHERE DB = ? AND INFO LIKE 'DELETE%';
-	#    	        };
-	#    	        my $sth = $dbh_check->prepare($processlist_query);
-	#    	        $sth->execute($DATABASE);
-	#    	        my ( $time, $state );
-	#    	        $sth->bind_columns( \( $time, $state ) );
-	#    	        while ( $sth->fetchrow_arrayref ) {
-	#    	            my $process = sprintf( "Time running:%0.3f sec\tSTATE:%s\n", $time, $state );
-	#    	            $log->trace( $process );
-	#    	            sleep 10;
-	#    	        }
-	#    	    }
-	#    	}    #end check
-	#
-	#		my $rows_del = $dbh->mysql_async_result;
-	#    	$log->debug( "Table $NR_TBL deleted $rows_del rows for {$division}" ) unless $@;
-	#    	$log->error( "Deleting $NR_TBL failed for {$division}: $@" ) if $@;
-	#	}
-
 	while (my ($ti, $division) = each %tis_to_del) {
-
+	
 		my $phylo_tbl = 'phylo_' . $ti;
-
+	
 		my $delete_cnt = qq{
 		DELETE nr FROM $NR_TBL AS nr
-		WHERE EXISTS (
-			SELECT 1 
-			FROM $phylo_tbl AS ph
-			WHERE nr.ti = ph.ps1
-    	};
-    	eval { $dbh->do($delete_cnt, { async => 1 } ) };
-
+		INNER JOIN $phylo_tbl AS ph
+		ON nr.ti = ph.ps1
+		};
+		eval { $dbh->do($delete_cnt, { async => 1 } ) };
+	
 		#check status while running
 		{    
-    	    my $dbh_check         = dbi_connect($param_href);
-    	    until ( $dbh->mysql_async_ready ) {
-    	        my $processlist_query = qq{
-    	        SELECT TIME, STATE FROM INFORMATION_SCHEMA.PROCESSLIST
-    	        WHERE DB = ? AND INFO LIKE 'DELETE%';
-    	        };
-    	        my $sth = $dbh_check->prepare($processlist_query);
-    	        $sth->execute($DATABASE);
-    	        my ( $time, $state );
-    	        $sth->bind_columns( \( $time, $state ) );
-    	        while ( $sth->fetchrow_arrayref ) {
-    	            my $process = sprintf( "Time running:%0.3f sec\tSTATE:%s\n", $time, $state );
-    	            $log->trace( $process );
-    	            sleep 10;
-    	        }
-    	    }
-    	}    #end check
-
+		    my $dbh_check         = dbi_connect($param_href);
+		    until ( $dbh->mysql_async_ready ) {
+		        my $processlist_query = qq{
+		        SELECT TIME, STATE FROM INFORMATION_SCHEMA.PROCESSLIST
+		        WHERE DB = ? AND INFO LIKE 'DELETE%';
+		        };
+		        my $sth = $dbh_check->prepare($processlist_query);
+		        $sth->execute($DATABASE);
+		        my ( $time, $state );
+		        $sth->bind_columns( \( $time, $state ) );
+		        while ( $sth->fetchrow_arrayref ) {
+		            my $process = sprintf( "Time running:%0.3f sec\tSTATE:%s\n", $time, $state );
+		            $log->trace( $process );
+		            sleep 10;
+		        }
+		    }
+		}    #end check
+	
 		my $rows_del = $dbh->mysql_async_result;
-    	$log->debug( "Table $NR_TBL deleted $rows_del rows for {$division}" ) unless $@;
-    	$log->error( "Deleting $NR_TBL failed for {$division}: $@" ) if $@;
+		$log->debug( "Table $NR_TBL deleted $rows_del rows for {$division}" ) unless $@;
+		$log->error( "Deleting $NR_TBL failed for {$division}: $@" ) if $@;
 	}
+	
+	#slower
+	#while (my ($ti, $division) = each %tis_to_del) {
 
+	#	my $phylo_tbl = 'phylo_' . $ti;
+
+	#	my $delete_cnt = qq{
+	#	DELETE nr FROM $NR_TBL AS nr
+	#	WHERE EXISTS (
+	#		SELECT 1 
+	#		FROM $phylo_tbl AS ph
+	#		WHERE nr.ti = ph.ps1)
+    #	};
+    #	eval { $dbh->do($delete_cnt, { async => 1 } ) };
+
+	#	#check status while running
+	#	{    
+    #	    my $dbh_check         = dbi_connect($param_href);
+    #	    until ( $dbh->mysql_async_ready ) {
+    #	        my $processlist_query = qq{
+    #	        SELECT TIME, STATE FROM INFORMATION_SCHEMA.PROCESSLIST
+    #	        WHERE DB = ? AND INFO LIKE 'DELETE%';
+    #	        };
+    #	        my $sth = $dbh_check->prepare($processlist_query);
+    #	        $sth->execute($DATABASE);
+    #	        my ( $time, $state );
+    #	        $sth->bind_columns( \( $time, $state ) );
+    #	        while ( $sth->fetchrow_arrayref ) {
+    #	            my $process = sprintf( "Time running:%0.3f sec\tSTATE:%s\n", $time, $state );
+    #	            $log->trace( $process );
+    #	            sleep 10;
+    #	        }
+    #	    }
+    #	}    #end check
+
+	#	my $rows_del = $dbh->mysql_async_result;
+    #	$log->debug( "Table $NR_TBL deleted $rows_del rows for {$division}" ) unless $@;
+    #	$log->error( "Deleting $NR_TBL failed for {$division}: $@" ) if $@;
+	#}
 
 	$dbh->disconnect;
 
