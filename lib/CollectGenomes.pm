@@ -3518,6 +3518,7 @@ sub import_raw_names {
 # Throws     : croaks for parameters
 # Comments   : it tries to emulate Robert's work and format
 #            : it removes Phages, viruses, Synthetic and Environmental samples
+#            : uses bulk insert with 10000 rows at once
 # See Also   :
 sub import_raw_nodes {
     my $log = Log::Log4perl::get_logger("main");
@@ -3561,20 +3562,11 @@ sub import_raw_nodes {
 
     {
         #prepare SQL for insert
-        my @columns             = qw/ti parent_ti division_id/;
-        my $columnlist          = join( ", ", @columns );
-        my $column_placeholders = join( ", ", map {'?'} @columns );
-
-        my $insert = qq{
-			INSERT INTO $table ($columnlist)
-			VALUES ( $column_placeholders)
-			};
-        my $sth = $dbh->prepare($insert);
-
-		#prepare list of lists for faster inserts
-		my @nodes_lol;
-		my $count_printed = 0;
-		my $count_inserted = 0;
+		my $base_query = qq{INSERT INTO $table VALUES };
+		my $query      = $base_query;
+		my $count      = 0;      #count to insert
+		my $max_rows   = 10000; # adjust it to your needs
+		my $inserted   = 0;      #count to report
 
         #reading part
         local $/ = "\t\|\n";
@@ -3588,7 +3580,7 @@ sub import_raw_nodes {
 
 			#root problems
 			if (($ti == 1) and ($parent_ti == 1)) {
-				$log->trace("Action: working on root!");
+				$log->warn("Action: root excluded from file and table: $table!");
 				#print {$nodes_out_fh} "$ti\t$parent_ti\n";
 				#my $false_parent = 100_000_000;
 				#$sth->execute( $ti, $false_parent, $division_id );
@@ -3603,136 +3595,30 @@ sub import_raw_nodes {
 				when (11) {next NODES;}   #Environmental samples say "Enviro out: $division_id";
 			}
             print {$nodes_out_fh} "$ti\t$parent_ti\n";
-			$count_printed++;
-			if ($count_printed <= 1000) {
-				push @nodes_lol, [$ti, $parent_ti, $division_id];
-			}
 
-			if ($count_printed == 1000) {
-				foreach (@nodes_lol) {
-					$sth->execute( @$_ );
-				}
-				$count_printed = 0;
-				@nodes_lol = ();
-				$log->trace("Action: imported 1000 rows");
-				$count_inserted += 1000;
-			}
+			#start of insert
+			my @values = ("$ti", "$parent_ti", "$division_id");
+			$query .= "," if $count++;
+		    $query .= "("  . join(",", map { $dbh->quote($_) } @values ) . ")";
 
-			END {
-				foreach (@nodes_lol) {
-					$sth->execute( @$_ );
-				}
-				$count_printed = 0;
-				my $last_rows = scalar @nodes_lol;
-				@nodes_lol = ();
-				$log->trace("Action: imported $last_rows rows");
-				$count_inserted += $last_rows;
-				$log->info("Action: inserted $count_inserted rows to nodes:$table");
-			}
-
-			#exit if $. > 1000;
+		    if ($count == $max_rows) {
+		        $dbh->do($query) or die "something wrong ($DBI::errstr)";
+		        $query = $base_query;
+				$inserted += $count;
+				$log->trace("Action: imported $count rows");
+		        $count = 0;
+		    }
         }
+		#run on end
+		$dbh->do($query) if $count;   #insert remaining rows
+		$inserted += $count;
+		$log->trace("Action: imported $count rows");
+		$log->info("Action: inserted $inserted rows to nodes:$table");
+
     }    #end block and end of local $/
 
     return;
 }
-
-
-### INTERFACE SUB ###
-# Usage      : import_raw_nodes( $param_href );
-# Purpose    : loads raw nodes.dmp from NCBI to MySQL
-# Returns    : nothing
-# Parameters : ( $param_href )
-# Throws     : croaks for parameters
-# Comments   : it tries to emulate Robert's work and format
-#            : it removes Phages, viruses, Synthetic and Environmental samples
-# See Also   :
-sub import_raw_nodes2 {
-    my $log = Log::Log4perl::get_logger("main");
-    $log->logcroak('import_raw_nodes() needs a hash_ref') unless @_ == 1;
-    my ($param_href) = @_;
-
-    my $INFILE   = $param_href->{INFILE}   or $log->logcroak('no $INFILE specified on command line!');
-    my $OUT      = $param_href->{OUT}      or $log->logcroak('no $OUT specified on command line!');
-    my $DATABASE = $param_href->{DATABASE} or $log->logcroak('no $DATABASE specified on command line!');
-    my $ENGINE = defined $param_href->{ENGINE} ? $param_href->{ENGINE} : 'InnoDB';
-    my $table = path($INFILE)->basename;
-    $table =~ tr/./_/;    #for files that have dots in name
-
-    #get new handle
-    my $dbh = dbi_connect($param_href);
-
-    #report what are you doing
-    $log->info("---------->Importing nodes $table");
-    my $create_query = sprintf(
-        qq{
-    CREATE TABLE IF NOT EXISTS %s (
-    ti INT UNSIGNED NOT NULL,
-    parent_ti INT UNSIGNED NOT NULL,
-	division_id TINYINT UNSIGNED NOT NULL,
-    PRIMARY KEY(ti),
-    KEY(parent_ti),
-	KEY(division_id)
-    )ENGINE=$ENGINE CHARACTER SET=ascii }, $dbh->quote_identifier($table)
-    );
-    create_table( { TABLE_NAME => $table, DBH => $dbh, QUERY => $create_query, %{$param_href} } );
-
-    #need to change format of nodes.dmp (print it and load it to MySQL)
-    #get name with date
-    my $now       = DateTime::Tiny->now;
-    my $date      = $now->year . '_' . $now->month . '_' . $now->day;
-    my $nodes_out = 'nodes_raw_' . $date;
-    $nodes_out = path( $OUT, $nodes_out );
-
-    open my $nodes_fh,     "<:encoding(ASCII)", $INFILE    or $log->logdie("Error: can't open $INFILE:$!");
-    open my $nodes_out_fh, ">:encoding(ASCII)", $nodes_out or $log->logdie("Error: can't write to $nodes_out:$!");
-
-    {
-        #prepare SQL for insert
-        my @columns             = qw/ti parent_ti division_id/;
-        my $columnlist          = join( ", ", @columns );
-        my $column_placeholders = join( ", ", map {'?'} @columns );
-
-        my $insert = qq{
-			INSERT INTO $table ($columnlist)
-			VALUES ( $column_placeholders)
-			};
-        my $sth = $dbh->prepare($insert);
-
-        #reading part
-        local $/ = "\t\|\n";
-      NODES:
-        while (<$nodes_fh>) {
-            chomp;
-
-            #select what to use
-            my ( $ti, $parent_ti, undef, undef, $division_id, undef, undef, undef, undef, undef, undef, undef, undef )
-              = split( /\t\|\t/, $_ );    #$_ is default for split and first argument to split is regex//
-
-			#root problems
-			if (($ti == 1) and ($parent_ti == 1)) {
-				$log->trace("Action: working on root!");
-				#print {$nodes_out_fh} "$ti\t$parent_ti\n";
-				#my $false_parent = 100_000_000;
-				#$sth->execute( $ti, $false_parent, $division_id );
-				next NODES;
-			}
-
-			#skip divisions:Viruses, synthetic, environmental
-			foreach ($division_id) {
-				when (3)  {next NODES;}   #Phages
-				when (7)  {next NODES;}   #Synthetic
-				when (9)  {next NODES;}   #Viruses
-				when (11) {next NODES;}   #Environmental samples
-			}
-            print {$nodes_out_fh} "$ti\t$parent_ti\n";
-            $sth->execute( $ti, $parent_ti, $division_id );
-        }
-    }    #end block and end of local $/
-
-    return;
-}
-
 
 
 
