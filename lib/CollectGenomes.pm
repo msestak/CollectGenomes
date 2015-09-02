@@ -3519,7 +3519,7 @@ sub import_raw_names {
 # Comments   : it tries to emulate Robert's work and format
 #            : it removes Phages, viruses, Synthetic and Environmental samples
 # See Also   :
-sub import_raw_nodes2 {
+sub import_raw_nodes {
     my $log = Log::Log4perl::get_logger("main");
     $log->logcroak('import_raw_nodes() needs a hash_ref') unless @_ == 1;
     my ($param_href) = @_;
@@ -3571,6 +3571,11 @@ sub import_raw_nodes2 {
 			};
         my $sth = $dbh->prepare($insert);
 
+		#prepare list of lists for faster inserts
+		my @nodes_lol;
+		my $count_printed = 0;
+		my $count_inserted = 0;
+
         #reading part
         local $/ = "\t\|\n";
       NODES:
@@ -3592,13 +3597,40 @@ sub import_raw_nodes2 {
 
 			#skip divisions:Viruses, synthetic, environmental
 			foreach ($division_id) {
-				when (3)  {next NODES;}   #Phages
-				when (7)  {next NODES;}   #Synthetic
-				when (9)  {next NODES;}   #Viruses
-				when (11) {next NODES;}   #Environmental samples
+				when (3)  {next NODES;}   #Phages     say "Phyges out: $division_id"; 
+				when (7)  {next NODES;}   #Synthetic  say "Synthe out: $division_id"; 
+				when (9)  {next NODES;}   #Viruses    say "Virus  out: $division_id"; 
+				when (11) {next NODES;}   #Environmental samples say "Enviro out: $division_id";
 			}
             print {$nodes_out_fh} "$ti\t$parent_ti\n";
-            $sth->execute( $ti, $parent_ti, $division_id );
+			$count_printed++;
+			if ($count_printed <= 1000) {
+				push @nodes_lol, [$ti, $parent_ti, $division_id];
+			}
+
+			if ($count_printed == 1000) {
+				foreach (@nodes_lol) {
+					$sth->execute( @$_ );
+				}
+				$count_printed = 0;
+				@nodes_lol = ();
+				$log->trace("Action: imported 1000 rows");
+				$count_inserted += 1000;
+			}
+
+			END {
+				foreach (@nodes_lol) {
+					$sth->execute( @$_ );
+				}
+				$count_printed = 0;
+				my $last_rows = scalar @nodes_lol;
+				@nodes_lol = ();
+				$log->trace("Action: imported $last_rows rows");
+				$count_inserted += $last_rows;
+				$log->info("Action: inserted $count_inserted rows to nodes:$table");
+			}
+
+			#exit if $. > 1000;
         }
     }    #end block and end of local $/
 
@@ -3615,7 +3647,7 @@ sub import_raw_nodes2 {
 # Comments   : it tries to emulate Robert's work and format
 #            : it removes Phages, viruses, Synthetic and Environmental samples
 # See Also   :
-sub import_raw_nodes {
+sub import_raw_nodes2 {
     my $log = Log::Log4perl::get_logger("main");
     $log->logcroak('import_raw_nodes() needs a hash_ref') unless @_ == 1;
     my ($param_href) = @_;
