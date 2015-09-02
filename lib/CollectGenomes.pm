@@ -3639,6 +3639,67 @@ sub import_raw_nodes {
 }
 
 
+### INTERFACE SUB ###
+# Usage      : print_nr_genomes( $param_href );
+# Purpose    : prints nr genomes to dropdox/D.../db../data/eukarya
+# Returns    : nothing
+# Parameters : ( $param_href )
+# Throws     : croaks for parameters
+# Comments   : it extracts genomes from database and prints them to $OUT
+# See Also   : 
+sub print_nr_genomes {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak( 'print_nr_genomes() needs a $param_href' ) unless @_ == 1;
+    my ( $param_href ) = @_;
+
+    my $ENGINE   = defined $param_href->{ENGINE} ? $param_href->{ENGINE} : 'InnoDB';
+	my $OUT      = $param_href->{OUT}      or $log->logcroak( 'no $OUT specified on command line!' );
+    my $DATABASE = $param_href->{DATABASE}    or $log->logcroak('no $DATABASE specified on command line!');
+    my %TABLES   = %{ $param_href->{TABLES} } or $log->logcroak('no $TABLES specified on command line!');
+    my $NR_TI_FASTA = $TABLES{nr_ti_fasta};
+    my $TI_FULLLIST = $TABLES{ti_fulllist};
+			
+	#get new handle
+    my $dbh = dbi_connect($param_href);
+
+	#get all tax_ids that belong to nr and print them to $OUT
+    my $tis_query = qq{
+    SELECT ti
+    FROM $TI_FULLLIST
+	WHERE genes_cnt IS NOT NULL
+    ORDER BY ti
+    };
+    my @tis = map { $_->[0] } @{ $dbh->selectall_arrayref($tis_query) };
+
+	#starting iteration over @tis to extract genomes from nr_ti_gi_fasta and  print to $OUT
+	foreach my $ti (@tis) {
+		$log->trace( "Action: working on $ti" );
+		my $genome_out = path( $OUT, $ti);
+		if (-f $genome_out) {
+			unlink $genome_out and $log->trace( "Action: file $genome_out unlinked" );
+		}
+
+		my $genome_query = qq{
+		SELECT CONCAT('>', gi), fasta
+		INTO OUTFILE '$genome_out'
+		FIELDS TERMINATED BY '\n'
+		LINES TERMINATED BY '\n'
+		FROM $NR_TI_FASTA
+		WHERE ti = $ti
+		ORDER BY gi;
+		};
+
+		eval { $dbh->do($genome_query) };
+		$log->error( "Action: file $genome_out failed to print: $@" ) if $@;
+		$log->debug( "Action: file $genome_out printed" ) unless $@;
+	
+	}
+
+	$dbh->disconnect;
+
+	return;
+}
+
 
 
 
