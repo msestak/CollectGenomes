@@ -3996,19 +3996,54 @@ sub run_cdhit {
 # Comments   : it needs starting dir
 #            : first time it creates dirs
 #            : second time it leaves existing dirs and only creates new ones
+#            : optional -if parameter is update_phylogeny file
 # See Also   : 
 sub make_db_dirs {
     my $log = Log::Log4perl::get_logger("main");
     $log->logcroak('make_db_dirs() needs a $param_href') unless @_ == 1;
     my ($param_href) = @_;
 
-    my $OUT      = $param_href->{OUT}      or $log->logcroak('no $OUT specified on command line!');
-    my $DATABASE = $param_href->{DATABASE} or $log->logcroak('no $DATABASE specified on command line!');
+    #my $IN     = $param_href->{IN}       or $log->logcroak('no $IN specified on command line!');
+    my $INFILE = $param_href->{INFILE};                                                     #optional
+    my $OUT    = $param_href->{OUT} or $log->logcroak('no $OUT specified on command line!');
 
     #get new handle
-    my $dbh = dbi_connect($param_href);
 
+    my @dirs = qw(
+      data/ensembl_ftp
+      data/nr_raw
+      data/nr_genomes
+      data/all_genomes
+      data/cdhit
+      data/jgi
+      doc
+      src
+    );
 
+    foreach my $dir (@dirs) {
+        my $path_dir = path( $OUT, $dir )->canonpath;
+        if ( -d $path_dir ) {
+            $log->warn("Report: $path_dir already exists");
+        }
+        else {
+            path($path_dir)->mkpath( { chmod => 0777 } ) and $log->debug("Action: created $path_dir");
+        }
+    }
+
+    #used to copy update_phylogeny7.tsv
+    if ($INFILE) {
+        my $doc_path = path( $OUT, 'doc' )->canonpath;
+        my $outfile = path($INFILE)->basename;
+        $outfile = path( $OUT, 'doc', $outfile )->canonpath;
+
+        if ( -f $outfile ) {
+            $log->warn("Report: $outfile already exists");
+        }
+        else {
+            path($INFILE)->copy($doc_path)
+              and $log->debug("Action: file $INFILE copied to:$outfile");
+        }
+    }
 
     return;
 }
