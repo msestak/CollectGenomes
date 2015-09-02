@@ -37,6 +37,7 @@ our @EXPORT_OK = qw{
 	get_parameters_from_cmd
 	dbi_connect
 	create_database
+	make_db_dirs
 	create_table
 	capture_output
 	ftp_robust
@@ -120,6 +121,7 @@ sub main {
     #need to create dispatch table for different usage depending on mode requested
     #dispatch table is hash (could be also hash_ref)
     my %dispatch = (
+		make_db_dirs                  => \&make_db_dirs,
         create_db                     => \&create_database,
         nr_ftp                        => \&ftp_robust,
         extract_nr                    => \&extract_nr,
@@ -3860,9 +3862,6 @@ sub prepare_cdhit_per_phylostrata {
 			my $pbs_path = print_cdhit_sh($ps, $out_ps_full);
 			$log->info(qq|Action: TORQUE script printed to $pbs_path|) if $pbs_path;
 		}
-
-
-
     }
 
     $dbh->disconnect;
@@ -3870,6 +3869,9 @@ sub prepare_cdhit_per_phylostrata {
 
 }
 
+
+### INTERNAL UTILITY ###
+#used by prepare_cdhit_per_phylostrata()
 #USAGE
 #catalanche( \@sel_files => 'selected.txt' );
 sub catalanche   #by JDPORTER on http://www.perlmonks.org/?node_id=515106
@@ -3982,6 +3984,45 @@ sub run_cdhit {
 	return;
 
 }
+
+
+### INTERFACE SUB ###
+# Usage      : make_db_dirs( $param_href );
+# Purpose    : creates directories to store files for creation of new database
+# Returns    : nothing
+# Parameters : ( $param_href )
+# Throws     : croaks for parameters
+#            : logs all creation
+# Comments   : it needs starting dir
+#            : first time it creates dirs
+#            : second time it leaves existing dirs and only creates new ones
+# See Also   : 
+sub make_db_dirs {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('make_db_dirs() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    my $OUT      = $param_href->{OUT}      or $log->logcroak('no $OUT specified on command line!');
+    my $DATABASE = $param_href->{DATABASE} or $log->logcroak('no $DATABASE specified on command line!');
+
+    #get new handle
+    my $dbh = dbi_connect($param_href);
+
+
+
+    return;
+}
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -4108,6 +4149,12 @@ For help write:
 
  perl CollectGenomes.pm -h
  perl CollectGenomes.pm -m
+
+=head1 EXAMPLE 02.09.2015 on tiktaalik
+
+
+
+
 
 
 =head1 LICENSE
