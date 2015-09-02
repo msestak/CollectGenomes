@@ -3519,6 +3519,102 @@ sub import_raw_names {
 # Comments   : it tries to emulate Robert's work and format
 #            : it removes Phages, viruses, Synthetic and Environmental samples
 # See Also   :
+sub import_raw_nodes2 {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('import_raw_nodes() needs a hash_ref') unless @_ == 1;
+    my ($param_href) = @_;
+
+    my $INFILE   = $param_href->{INFILE}   or $log->logcroak('no $INFILE specified on command line!');
+    my $OUT      = $param_href->{OUT}      or $log->logcroak('no $OUT specified on command line!');
+    my $DATABASE = $param_href->{DATABASE} or $log->logcroak('no $DATABASE specified on command line!');
+    my $ENGINE = defined $param_href->{ENGINE} ? $param_href->{ENGINE} : 'InnoDB';
+    my $table = path($INFILE)->basename;
+    $table =~ tr/./_/;    #for files that have dots in name
+
+    #get new handle
+    my $dbh = dbi_connect($param_href);
+
+    #report what are you doing
+    $log->info("---------->Importing nodes $table");
+    my $create_query = sprintf(
+        qq{
+    CREATE TABLE IF NOT EXISTS %s (
+    ti INT UNSIGNED NOT NULL,
+    parent_ti INT UNSIGNED NOT NULL,
+	division_id TINYINT UNSIGNED NOT NULL,
+    PRIMARY KEY(ti),
+    KEY(parent_ti),
+	KEY(division_id)
+    )ENGINE=$ENGINE CHARACTER SET=ascii }, $dbh->quote_identifier($table)
+    );
+    create_table( { TABLE_NAME => $table, DBH => $dbh, QUERY => $create_query, %{$param_href} } );
+
+    #need to change format of nodes.dmp (print it and load it to MySQL)
+    #get name with date
+    my $now       = DateTime::Tiny->now;
+    my $date      = $now->year . '_' . $now->month . '_' . $now->day;
+    my $nodes_out = 'nodes_raw_' . $date;
+    $nodes_out = path( $OUT, $nodes_out );
+
+    open my $nodes_fh,     "<:encoding(ASCII)", $INFILE    or $log->logdie("Error: can't open $INFILE:$!");
+    open my $nodes_out_fh, ">:encoding(ASCII)", $nodes_out or $log->logdie("Error: can't write to $nodes_out:$!");
+
+    {
+        #prepare SQL for insert
+        my @columns             = qw/ti parent_ti division_id/;
+        my $columnlist          = join( ", ", @columns );
+        my $column_placeholders = join( ", ", map {'?'} @columns );
+
+        my $insert = qq{
+			INSERT INTO $table ($columnlist)
+			VALUES ( $column_placeholders)
+			};
+        my $sth = $dbh->prepare($insert);
+
+        #reading part
+        local $/ = "\t\|\n";
+      NODES:
+        while (<$nodes_fh>) {
+            chomp;
+
+            #select what to use
+            my ( $ti, $parent_ti, undef, undef, $division_id, undef, undef, undef, undef, undef, undef, undef, undef )
+              = split( /\t\|\t/, $_ );    #$_ is default for split and first argument to split is regex//
+
+			#root problems
+			if (($ti == 1) and ($parent_ti == 1)) {
+				$log->trace("Action: working on root!");
+				#print {$nodes_out_fh} "$ti\t$parent_ti\n";
+				#my $false_parent = 100_000_000;
+				#$sth->execute( $ti, $false_parent, $division_id );
+				next NODES;
+			}
+
+			#skip divisions:Viruses, synthetic, environmental
+			foreach ($division_id) {
+				when (3)  {next NODES;}   #Phages
+				when (7)  {next NODES;}   #Synthetic
+				when (9)  {next NODES;}   #Viruses
+				when (11) {next NODES;}   #Environmental samples
+			}
+            print {$nodes_out_fh} "$ti\t$parent_ti\n";
+            $sth->execute( $ti, $parent_ti, $division_id );
+        }
+    }    #end block and end of local $/
+
+    return;
+}
+
+
+### INTERFACE SUB ###
+# Usage      : import_raw_nodes( $param_href );
+# Purpose    : loads raw nodes.dmp from NCBI to MySQL
+# Returns    : nothing
+# Parameters : ( $param_href )
+# Throws     : croaks for parameters
+# Comments   : it tries to emulate Robert's work and format
+#            : it removes Phages, viruses, Synthetic and Environmental samples
+# See Also   :
 sub import_raw_nodes {
     my $log = Log::Log4perl::get_logger("main");
     $log->logcroak('import_raw_nodes() needs a hash_ref') unless @_ == 1;
@@ -3613,10 +3709,8 @@ sub import_raw_nodes {
 
 
 
-
 1;
 __END__
-
 =encoding utf-8
 
 =head1 NAME
@@ -3647,19 +3741,17 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
 
  perl ./lib/CollectGenomes.pm --mode=gi_taxid -if ./nr/gi_taxid_prot.dmp.gz -o ./nr/ -ho localhost -u msandbox -p msandbox -d nr --port=5625 --socket=/tmp/mysql_sandbox5625.sock --engine=InnoDB
 
- perl ./lib/CollectGenomes.pm -mode=del_virus_from_nr -tbl nr=gi_taxid_prot_TokuDB -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v
-
  perl ./lib/CollectGenomes.pm --mode=ti_gi_fasta -d nr -ho localhost -u msandbox -p msandbox --port=5625 --socket=/tmp/mysql_sandbox5625.sock --engine=InnoDB
 
  perl ./lib/CollectGenomes.pm --mode=mysqldump -o ./t/nr -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
  Part IV -> set phylogeny for focal species:
 
- perl ./lib/CollectGenomes.pm --mode=import_names -if ./nr/names_martin7 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=InnoDB
  perl ./lib/CollectGenomes.pm --mode=import_raw_names -if ./t/nr/taxdump/names.dmp -o ./t/nr/ -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=InnoDB
+ perl ./lib/CollectGenomes.pm --mode=import_names -if ./nr/names_martin7 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=InnoDB
 
- perl ./lib/CollectGenomes.pm --mode=import_nodes -if ./nr/nodes_martin7 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=InnoDB
  perl ./lib/CollectGenomes.pm --mode=import_raw_nodes -if ./t/nr/taxdump/nodes.dmp -o ./t/nr/ -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=InnoDB
+ perl ./lib/CollectGenomes.pm --mode=import_nodes -if ./nr/nodes_martin7 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=InnoDB
 
  perl ./lib/CollectGenomes.pm -mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_martin7 -t 2759 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
  perl ./lib/CollectGenomes.pm -mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_martin7 -t 7955 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v --engine=InnoDB
@@ -3668,6 +3760,8 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
  (Viruses:10239)=perl ./lib/CollectGenomes.pm -mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_martin7 -t 10239 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v --engine=TokuDB
  (Other:28384)=perl ./lib/CollectGenomes.pm -mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_martin7 -t 28384 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v --engine=TokuDB
  (unclassified:12908)=perl ./lib/CollectGenomes.pm -mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_martin7 -t 12908 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v --engine=TokuDB
+
+ perl ./lib/CollectGenomes.pm -mode=del_virus_from_nr -tbl nr=gi_taxid_prot_TokuDB -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v
 
  Part V -> get genomes from nr base:
 
@@ -3686,7 +3780,6 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
  perl ./lib/CollectGenomes.pm --mode=del_total_genomes -tbl nr_cnt=nr_ti_gi_fasta_InnoDB_cnt -tbl ti_files=ti_files -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625n=InnoDB
 
 
- perl ./bin/CollectGenomes.pm --mode=del_total_genomes --in=. -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
  perl ./bin/CollectGenomes.pm --mode=print_nr_genomes --out=/home/msestak/dropbox/Databases/db_29_07_15/data/eukarya/ -ho localhost -d nr -u msandbox -p msandbox -po 5622 -s /tmp/mysql_sandbox5622.sock
 
