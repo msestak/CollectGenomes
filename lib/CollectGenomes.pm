@@ -3652,7 +3652,6 @@ sub print_nr_genomes {
     $log->logcroak( 'print_nr_genomes() needs a $param_href' ) unless @_ == 1;
     my ( $param_href ) = @_;
 
-    my $ENGINE   = defined $param_href->{ENGINE} ? $param_href->{ENGINE} : 'InnoDB';
 	my $OUT      = $param_href->{OUT}      or $log->logcroak( 'no $OUT specified on command line!' );
     my $DATABASE = $param_href->{DATABASE}    or $log->logcroak('no $DATABASE specified on command line!');
     my %TABLES   = %{ $param_href->{TABLES} } or $log->logcroak('no $TABLES specified on command line!');
@@ -3693,6 +3692,68 @@ sub print_nr_genomes {
 		$log->error( "Action: file $genome_out failed to print: $@" ) if $@;
 		$log->debug( "Action: file $genome_out printed" ) unless $@;
 	
+	}
+
+	$dbh->disconnect;
+
+	return;
+}
+
+### INTERFACE SUB ###
+# Usage      : copy_existing_genomes( $param_href );
+# Purpose    : prints present genomes to dropdox/D.../db../data/eukarya
+# Returns    : nothing
+# Parameters : ( $param_href )
+# Throws     : croaks for parameters
+# Comments   : it takes genomes from old directory (base) and prints them to $OUT
+# See Also   : 
+sub copy_existing_genomes {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak( 'copy_existing_genomes() needs a $param_href' ) unless @_ == 1;
+    my ( $param_href ) = @_;
+
+	my $DATABASE = $param_href->{DATABASE} or $log->logcroak( 'no $DATABASE specified on command line!' );
+	my $OUT      = $param_href->{OUT}      or $log->logcroak( 'no $OUT specified on command line!' );
+	my $IN       = $param_href->{IN}   or $log->logcroak( 'no $IN specified on command line!' );
+    my %TABLES   = %{ $param_href->{TABLES} } or $log->logcroak('no $TABLES specified on command line!');
+    my $TI_FULLLIST = $TABLES{ti_fulllist};
+			
+	#get new handle
+    my $dbh = dbi_connect($param_href);
+
+	#get all tax_ids that belong to ENSEMBL genomes
+    my $tis_query = qq{
+    SELECT ti
+    FROM $TI_FULLLIST
+	WHERE genes_cnt IS NULL
+    ORDER BY ti
+    };
+    my @tis = map { $_->[0] } @{ $dbh->selectall_arrayref($tis_query) };
+
+	#SECOND PART: get all existing genomes from $IN
+	my @ti_files = File::Find::Rule->file()
+								   ->name(qr/\A\d+\z/)
+								   ->in($IN);
+	@ti_files = sort {$a cmp $b} @ti_files;
+
+	#starting iteration over @ti_files to copy genomes from $IN to $OUT
+	foreach my $ti_file (@ti_files) {
+		$log->trace( "Action: working on $ti_file" );
+		my $ti_from_file = path($ti_file)->basename;
+
+		if (grep {$_ == $ti_from_file} @tis ) {
+			#delete ti_files (genomes) if they exist in $OUT dir
+			my $end_ti_file = path($OUT, $ti_from_file);
+			if (-f $end_ti_file) {
+			unlink $end_ti_file and $log->warn( "Action: file $end_ti_file unlinked" );
+			}
+			#copy them from $IN to $OUT
+            path($ti_file)->copy($OUT)
+				and $log->debug( "Action: File $ti_file copied to $OUT" );
+		}
+		else {
+			$log->info( "Action: file $ti_file not found in modified list:$TI_FULLLIST" );
+		}
 	}
 
 	$dbh->disconnect;
@@ -3776,11 +3837,9 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
 
  perl ./lib/CollectGenomes.pm --mode=del_total_genomes -tbl nr_cnt=nr_ti_gi_fasta_InnoDB_cnt -tbl ti_files=ti_files -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625n=InnoDB
 
+ perl ./lib/CollectGenomes.pm --mode=print_nr_genomes -tbl ti_fulllist=ti_fulllist -tbl nr_ti_fasta=nr_ti_gi_fasta_InnoDB -o ./t/nr -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
-
- perl ./bin/CollectGenomes.pm --mode=print_nr_genomes --out=/home/msestak/dropbox/Databases/db_29_07_15/data/eukarya/ -ho localhost -d nr -u msandbox -p msandbox -po 5622 -s /tmp/mysql_sandbox5622.sock
-
- perl ./bin/CollectGenomes.pm --mode=copy_existing_genomes --in=/home/msestak/dropbox/Databases/db_29_07_15/data/eukarya_old/  --out=/home/msestak/dropbox/Databases/db_29_07_15/data/eukarya/ -ho localhost -d nr -u msandbox -p msandbox -po 5622 -s /tmp/mysql_sandbox5622.sock
+ perl ./lib/CollectGenomes.pm --mode=copy_existing_genomes -tbl ti_fulllist=ti_fulllist --in=./ensembl_ftp/ --out=./t/nr -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
  Part VII -> download genomes from JGI: (not working)
 
