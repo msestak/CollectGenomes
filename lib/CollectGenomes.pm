@@ -3425,7 +3425,8 @@ sub del_total_genomes {
 # Returns    : nothing
 # Parameters : ( $param_href )
 # Throws     : croaks for parameters
-# Comments   : it tries to emulate Robert's work and format (tilda in 3rd column and underscores in species_name)
+# Comments   : it tries to emulate Robert's work and format (tilda in 3rd column and underscores everywhere)
+#            : uses bulk insert (23k rows/s)
 # See Also   :
 sub import_raw_names {
     my $log = Log::Log4perl::get_logger("main");
@@ -3475,13 +3476,14 @@ sub import_raw_names {
         #prepare SQL for insert
         my @columns             = qw/ti species_name species_synonym name_type/;
         my $columnlist          = join( ", ", @columns );
-        my $column_placeholders = join( ", ", map {'?'} @columns );
 
         my $insert = qq{
-			INSERT INTO $table ($columnlist)
-			VALUES ( $column_placeholders)
+			INSERT INTO $table ($columnlist) VALUES 
 			};
-        my $sth = $dbh->prepare($insert);
+		my $query      = $insert;
+		my $count      = 0;      #count to insert
+		my $max_rows   = 10000;  #adjust it to your needs
+		my $inserted   = 0;      #count to report
 
         #reading part
         local $/ = "\t\|\n";
@@ -3501,10 +3503,26 @@ sub import_raw_names {
             $name_type       =~ tr/ /_/;
 
             print {$names_out_fh} "$ti\t$species_name\t$species_synonym\t$name_type\n";
-            $sth->execute( $ti, $species_name, $species_synonym, $name_type );
 
-            #exit(0) if $. > 111;
+			#start the insert
+			my @values = ("$ti", "$species_name", "$species_synonym", "$name_type");
+			$query .= "," if $count++;
+		    $query .= "("  . join(",", map { $dbh->quote($_) } @values ) . ")";
+
+		    if ($count == $max_rows) {
+		        $dbh->do($query) or die "something wrong ($DBI::errstr)";
+		        $query = $insert;   #reset to base query
+				$inserted += $count;
+				$log->trace("Action: imported $count rows");
+		        $count = 0;         #reset to base count
+		    }
         }
+		#run at end
+		$dbh->do($query) if $count;   #insert remaining rows
+		$inserted += $count;
+		$log->trace("Action: imported $count rows");
+		$log->info("Action: inserted $inserted rows to nodes:$table");
+
     }   #end block and end of local $/
 
     return;
