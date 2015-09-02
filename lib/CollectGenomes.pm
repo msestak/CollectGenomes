@@ -3762,6 +3762,227 @@ sub copy_existing_genomes {
 }
 
 
+### INTERFACE SUB ###
+# Usage      : prepare_cdhit_per_phylostrata( $param_href );
+# Purpose    : it splits database of genomes based on phylostrata and sends each phylostrata to cdhit
+# Returns    : nothing
+# Parameters : ( $param_href )
+# Throws     : croaks for parameters
+# Comments   : it needs indir for genomes, phylo table for species and outdir per phylostrata
+#            : it appends to per_ps_genome file (can be run for multiple indirs -> bacteria, archea and eukarya)
+# See Also   : run first: perl blastdb_analysis.pl --mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_martin7 -t 7955 -org dr -h localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+#            : for Danio rerio
+sub prepare_cdhit_per_phylostrata {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('prepare_cdhit_per_phylostrata() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    my $DATABASE = $param_href->{DATABASE} or $log->logcroak('no $DATABASE specified on command line!');
+    my $IN       = $param_href->{IN}       or $log->logcroak('no $IN specified on command line!');
+    my $OUT      = $param_href->{OUT}      or $log->logcroak('no $OUT specified on command line!');
+    my %TABLES   = %{ $param_href->{TABLES} } or $log->logcroak('no $TABLES specified on command line!');
+    my $PHYLO    = $TABLES{phylo};
+
+    #get new handle
+    my $dbh = dbi_connect($param_href);
+
+    #FIRST: get phylostrata from phylo table
+    my $select_ps_columns = qq{
+        SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = '$DATABASE' AND TABLE_NAME = '$PHYLO' AND ORDINAL_POSITION > 1
+    };    #-- skip first column which is id auto_increment
+
+    my @ps_columns = map { $_->[0] } @{ $dbh->selectall_arrayref($select_ps_columns) };
+	my $ps_num = @ps_columns;
+    $log->debug(qq|Report: $ps_num phylostrata: @ps_columns|);
+
+    #collect all files from $IN
+    my @ti_files = File::Find::Rule->file()->name(qr/\A\d+\z/)->in($IN);
+	@ti_files = sort @ti_files;
+
+    #create outdir foreach phylostratum and copy genomes from that ps into it
+    DIR:
+    foreach my $ps (@ps_columns) {
+		my $ps_path = path( $OUT, $ps );
+        if ( -d $ps_path ) {
+            path($ps_path)->remove_tree and $log->warn(qq|Action: dir $ps_path removed|);
+        }
+        path( $ps_path )->mkpath and $log->trace(qq|Action: dir $ps_path created|);
+
+        my $select_ti = sprintf( qq{
+		SELECT %s
+		FROM %s
+		WHERE %s = ? },
+            $dbh->quote_identifier($ps), $dbh->quote_identifier($PHYLO), $dbh->quote_identifier($ps)
+        );
+        my $sth = $dbh->prepare($select_ti);
+
+		#say "Full TI_FILES:@ti_files";
+        TAXID:
+        foreach my $ti_file (@ti_files) {
+            my $ti = path($ti_file)->basename;
+
+            $sth->execute($ti);
+			#say $select_ti;
+            $sth->bind_col( 1, \my $tax_id, { TYPE => 'integer' } );
+            $sth->fetchrow_arrayref();
+
+            my $taxid_in_ps_dir = path( $ps_path, $ti );
+            if ( -f $taxid_in_ps_dir ) {
+                unlink $taxid_in_ps_dir and $log->warn(qq|Action: genome $taxid_in_ps_dir unlinked|);
+            }
+
+            if ($tax_id) {
+                path($ti_file)->copy($ps_path) and $log->debug(qq|Action: File $ti_file copied to $ps_path|);
+            }
+        }
+		#cat all files in one ps
+		my $out_ps_full = path($OUT, $ps . '.fa');
+		if (-f $out_ps_full) {
+			#unlink $out_ps_full and $log->warn(qq|Action: ps_full_file $out_ps_full unlinked|);
+			$log->warn(qq|Action: ps_full_file $out_ps_full exists, it will be appended|);
+		}
+		my @tis_in_psdir = File::Find::Rule->file()->name(qr/\A\d+\z/)->in($ps_path);
+		#my @ti_files = sort @ti_files;
+		if (@tis_in_psdir) {
+			my $cnt_per_ps = @tis_in_psdir;
+			catalanche(\@tis_in_psdir => $out_ps_full); 
+			$log->debug(qq|Action: concatenated $cnt_per_ps files to $out_ps_full|);
+		}
+
+		#clean ps directories
+		if ( -d $ps_path ) {
+            path($ps_path)->remove_tree and $log->warn(qq|Action: dir $ps_path removed|);
+        }
+		
+		#create TORQUE scripts to run cdhit
+		if (-f $out_ps_full) {
+			my $pbs_path = print_cdhit_sh($ps, $out_ps_full);
+			$log->info(qq|Action: TORQUE script printed to $pbs_path|) if $pbs_path;
+		}
+
+
+
+    }
+
+    $dbh->disconnect;
+    return;
+
+}
+
+#USAGE
+#catalanche( \@sel_files => 'selected.txt' );
+sub catalanche   #by JDPORTER on http://www.perlmonks.org/?node_id=515106
+{
+    system qq( cat "$_" >> "$_[1]" ) for @{$_[0]};
+	return;
+}
+
+
+sub print_cdhit_sh {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('print_cdhit_sh() needs $ps and $out_ps_full') unless @_ == 2;
+	my ($ps, $out_ps_full) = @_;
+
+	(my $out_cluster = $out_ps_full) =~ s/\.fa\z//g;
+
+	my $cdhit_torque = <<"TORQUE";
+#!/bin/bash
+
+
+# job name
+#PBS -N cdhit_$ps
+
+#PBS -m e
+#PBS -M msestak\@irb.hr
+
+# queue:
+#PBS -q default
+
+# request resources (this is optional)
+#
+#PBS ncpus=24:mem=30gb
+
+
+# executable line
+
+/home/msestak/kclust/cdhit/cd-hit-v4.6.1-2012-08-27/cd-hit -i $out_ps_full -o $out_cluster -c 0.9 -n 5 -M 0 -T 0 -d 200
+
+# setting the CD-HIT parameter -T 0, all CPUs defined in the SLURM script will be used.
+# setting the parameter -M 0 allows unlimited usage of the available memory.
+# setting the parameter -d 60 (length of header)
+
+TORQUE
+
+	my $pbs_path = path(path($out_ps_full)->parent, "$ps" . ".pbs");
+	open my $pbs_fh, ">", $pbs_path or $log->logdie(qq|Report: Can't write to $pbs_path|);
+	say {$pbs_fh} $cdhit_torque;
+
+	#print cd-hit command to screen and separate file
+	my $cdhit_cmd = qq{/home/msestak/kclust/cdhit/cd-hit-v4.6.1-2012-08-27/cd-hit -i $out_ps_full -o $out_cluster -c 0.9 -n 5 -M 0 -T 0 -d 200};
+	my $cmd_file  = path(path($out_ps_full)->parent, "cd_hit_cmds");
+	open my $cmd_fh, ">>", $cmd_file or $log->logdie(qq|Report: Can't write to $cmd_file|);
+	say {$cmd_fh} $cdhit_cmd;
+	$log->debug(qq|$cdhit_cmd|);
+
+	return $pbs_path;
+
+}
+
+
+### INTERFACE SUB ###
+# Usage      : run_cdhit( $param_href );
+# Purpose    : it runs cd-hit from command line (not from PBS script)
+# Returns    : nothing
+# Parameters : ( $param_href )
+# Throws     : croaks for parameters
+# Comments   : it needs indir for genomes and outdir
+#            : creates total db at end
+# See Also   : run first: perl blastdb_analysis.pl --mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_martin7 -t 7955 -org dr -h localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+sub run_cdhit {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('run_cdhit() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    my $DATABASE = $param_href->{DATABASE} or $log->logcroak('no $DATABASE specified on command line!');
+    my $INFILE   = $param_href->{INFILE}   or $log->logcroak('no $INFILE specified on command line!');
+    my $OUT      = $param_href->{OUT}      or $log->logcroak('no $OUT specified on command line!');
+
+	my $cmd_file;
+	$cmd_file = path($INFILE)->slurp or $log->logdie(qq|Report: Can't open cd-hit command-file $cmd_file|);
+	my @cmd_lines = split("\n", $cmd_file);
+	@cmd_lines = reverse @cmd_lines;   #start from last phylostratum
+
+	foreach my $cmd (@cmd_lines) {
+		chomp;
+		(my $ps = $cmd) =~ m{(ps\d+)}g;
+		my ($stdout_cd, $stderr_cd, $exit_cd) = capture_output( $cmd, $param_href );
+			if ($exit_cd == 0) {
+				my @lines = split("\n", $stdout_cd);
+				my ($input_seqs1, $input_seqs2, $clusters);
+				for (@lines) {
+					when (m/\Atotal seq:\s+(\d+)/) {$input_seqs1 = $1;}
+					when (m/(\d+)\s+finished\s+(\d+)\s+clusters/) { $input_seqs2 = $1; $clusters = $2;}
+				}
+				if ($input_seqs1 != $input_seqs2) {
+					$log->error(qq|Report: some sequences skipped because of errors|);
+				}
+
+				$log->trace(qq|Action: cd-hit for $ps with:$input_seqs2 and OUT:$clusters clusters|);
+
+			}
+			else {
+				$log->error(qq|Action: $cmd failed|);
+			}
+
+			sleep 10;
+
+	}
+
+	return;
+
+}
+
 
 
 
@@ -3846,7 +4067,7 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
  perl ./lib/CollectGenomes.pm --mode=jgi_download --names=names_martin7 -o ./xml/ -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v
 
  Part VIII -> prepare and run cd-hit
- perl ./bin/CollectGenomes.pm --mode=prepare_cdhit_per_phylostrata --in=./data_in/t_eukarya/ --out=./data_out/ -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ perl ./bin/CollectGenomes.pm --mode=prepare_cdhit_per_phylostrata --in=./data_in/t_eukarya/ --out=./data_out/ -tbl phylo=phylo_7955 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
  perl ./bin/CollectGenomes.pm --mode=prepare_cdhit_per_phylostrata --in=/home/msestak/dropbox/Databases/db_29_07_15/data/archaea/ --out=/home/msestak/dropbox/Databases/db_29_07_15/data/cdhit/ -ho localhost -d nr -u msandbox -p msandbox -po 5622 -s /tmp/mysql_sandbox5622.sock
 
 
