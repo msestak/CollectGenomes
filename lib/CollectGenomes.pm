@@ -612,14 +612,16 @@ sub ensembl_ftp_vertebrates {
 		#hash slice - values come in order of columns list
 		INSERT:
 		foreach (@col_loh) {
-			eval { $sth->execute( @{$_}{@columns} ) };
+			eval { $sth->execute( @{$_}{@columns} ) }; 
+			#same as sth->execute( $_->{species_name}, $_->{ti}, $_->{assembly}, $_->{assembly_accession}, $_->{variation} );
 			if ($@) {
-				my $species_error = $_->{species_name};
+				my $species_error = $_->{species_name};   #@col_loh is list of hashrefs therefore ->
 				$log->error(qq|Report: insert failed for:$species_error (duplicate genome with PRE?)|);
 				#say $@;
 				next INSERT;
 			}
-			#sth->execute( $_->{species_name}, $_->{ti}, $_->{assembly}, $_->{assembly_accession}, $_->{variation} );
+			
+			$log->info(qq|Report: inserted species:$_->{species_name} with taxid:$_->{ti}|);
 		}
 
 
@@ -4199,9 +4201,11 @@ For help write:
  perl ./lib/CollectGenomes.pm --mode=make_db_dirs -o /home/msestak/dropbox/Databases/db_02_09_2015/ -if /home/msestak/dropbox/Databases/db_29_07_15/doc/update_phylogeny_martin7.tsv
 
  ### Part I -> download genomes from Ensembl:
- #download protists, fungi, metazoa and bacteria
+ #download protists, fungi, metazoa and bacteria (21085)
  perl ./lib/CollectGenomes.pm --mode=ensembl_ftp --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/ensembl_ftp/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
  #download vertebrates
+ #need to scrape HTML to get to taxids in order to download vertebrates from Ensembl (+78 = total 21163)
+ perl ./lib/CollectGenomes.pm --mode=ensembl_vertebrates --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/ensembl_vertebrates/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.soc
  
  ### Part II -> download genomes from NCBI:
  #download NCBI nr protein fasta file with gi_taxid_prot and taxdump
