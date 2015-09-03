@@ -625,12 +625,40 @@ sub ensembl_ftp_vertebrates {
 		}
 
 
-	my $REMOTE_HOST = $param_href->{REMOTE_HOST} //= 'ftp.ensembl.org';
-	my $REMOTE_DIR  = $param_href->{REMOTE_DIR}  //= 'pub/current_fasta/';
-	my $OUT      = $param_href->{OUT}      or $log->logcroak( 'no $OUT specified on command line!' );
+		my $REMOTE_HOST = $param_href->{REMOTE_HOST} //= 'ftp.ensembl.org';
+		my $OUT      = $param_href->{OUT}      or $log->logcroak( 'no $OUT specified on command line!' );
+
+		#part III: ftp download of PRE genomes
+		my $REMOTE_DIR = 'pub/pre/fasta/pep';
+		$param_href->{REMOTE_DIR} = $REMOTE_DIR;
+
+        my $ftp_pre;
+        $ftp_pre = Net::FTP::AutoReconnect->new( $REMOTE_HOST, Debug => 0 )
+          or $log->logdie("Action: Can't connect to $REMOTE_HOST: $@");
+        $ftp_pre->login( "anonymous", 'msestak@irb.hr' ) or $log->logdie( "Action: Can't login ", $ftp_pre->message );
+        $ftp_pre->binary() or $log->logdie("Opening binary mode data connection failed for $_: $@");
+        $ftp_pre->cwd($REMOTE_DIR) or $log->logdie( "Can't change working directory ", $ftp_pre->message );
+        $ftp_pre->pasv() or $log->logdie("Opening passive mode data connection failed for $_: $@");
+        $log->trace( "Report: location: ", $ftp_pre->pwd() );
+
+		my @species_listing_pre = $ftp_pre->ls;
+		#my @species_listing_pre = ('erinaceus_europaeus');
+		$log->trace("@species_listing_pre");
+        PRE:
+        foreach my $species_dir_out (@species_listing_pre) {
+            if ( $species_dir_out eq 'ancestral_alleles' ) {
+                $log->trace("Action: ancestral_alleles skipped");
+                next PRE;
+            }
+
+            #crucial to send $ftp_pre to the sub (else it uses old one from previous division)
+            ftp_get_pre(
+                { DIR => $species_dir_out, FTP => $ftp_pre, TABLE => $table_ensembl_end, DBH => $dbh, %{$param_href} } );
+        }
 
         #part II: ftp download of vertebrate genomes
-        #file for statistics and header information (print outside $OUT so you don't mix with genomes)
+		$REMOTE_DIR  = 'pub/current_fasta/';
+		$param_href->{REMOTE_DIR} = $REMOTE_DIR;
 
         my $ftp;
         $ftp = Net::FTP::AutoReconnect->new( $REMOTE_HOST, Debug => 0 )
@@ -700,7 +728,7 @@ sub ftp_get_proteome {
 	if (!$tax_id) {
 		#some entries (dirs) are not present in info file (like D. melanogaster
 		#found in ensembl.org and not ensembl.genomes.org (but found on ftp)
-		$log->error( qq|Report: $species_dir not found in $table_info (not found in info files (probably dleted because of TAXID problems))| );
+		$log->error( qq|Report: $species_dir not found in $table_info (not found in info files (probably deleted because of TAXID problems))| );
 		$ftp->cdup();   #go 2 dirs up to $REMOTE_DIR (cdup = current dir up)
 		$ftp->cdup();   #cwd goes only down or cwd(..) goes to parent (cwd() goes to root)
 		return;
@@ -796,6 +824,257 @@ sub ftp_get_proteome {
 	return;
 
 }
+
+### INTERNAL UTILITY ###
+# Usage      : ftp_get_pre(
+#            : { DIR => $species_dir_out, FTP => $ftp, TABLE => $table_ensembl_end, DBH => $dbh, %{$param_href} } );
+# Purpose    : downloads proteomes from Ensembl PRE only
+# Returns    : nothing
+# Parameters : hash_ref
+# Throws     : 
+# Comments   : it reconnects - usable for long downloads
+# See Also   : calling sub (mode) ensembl_vertebrates()
+sub ftp_get_pre {
+	my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak( 'ftp_get_pre() needs a $param_href' ) unless @_ == 1;
+
+    my ($param_href) = @_;
+
+    my $OUT         = $param_href->{OUT}   or $log->logcroak('no $OUT specified on command line!');
+    my $species_dir = $param_href->{DIR}   or $log->logcroak('no $species_dir sent to ftp_get_pre!');
+    my $ftp         = $param_href->{FTP}   or $log->logcroak('no $ftp sent to ftp_get_pre!');
+    my $table_info  = $param_href->{TABLE} or $log->logcroak('no $table_info sent to ftp_get_pre!');
+    my $dbh         = $param_href->{DBH}   or $log->logcroak('no $dbh sent to ftp_get_pre!');
+    my $REMOTE_HOST = $param_href->{REMOTE_HOST} //= 'ftp.ensembl.org';
+    my $REMOTE_DIR  = $param_href->{REMOTE_DIR}  //= 'pub/current_fasta/';
+
+	$log->trace("Action: working with $species_dir" );
+	$log->trace("Report: location: ", $ftp->pwd() );
+	
+	my $spec_path = path($species_dir);
+	$ftp->cwd($spec_path) or $log->logdie( qq|Can't change working directory to $spec_path:|, $ftp->message );
+	
+	#get taxid based on name of species_dir (for final output file)
+	my $get_taxid_query = sprintf(qq{
+	SELECT ti
+	FROM %s
+	WHERE species = ?}, $dbh->quote_identifier($table_info) );
+	my $sth = $dbh->prepare($get_taxid_query);
+	$sth->execute($species_dir);
+	my $tax_id;
+	$sth->bind_col(1, \$tax_id, {TYPE => 'integer'} );
+	$sth->fetchrow_arrayref();
+
+	if (!$tax_id) {
+		#some entries (dirs) are not present in info file (like D. melanogaster
+		#found in ensembl.org and not ensembl.genomes.org (but found on ftp)
+		$log->error( qq|Report: $species_dir not found in $table_info (not found in info files (probably deleted because of TAXID problems))| );
+		$ftp->cdup();   #go one dir up to $REMOTE_DIR (cdup = current dir up)
+		return;
+	}
+
+	#get fasta file inside
+	my @pep_listing = $ftp->ls;
+	FILE:
+	foreach my $proteome (@pep_listing) {
+
+		#skip all if nothing useful here
+		if ($proteome =~ m/pre\.pep\.fa\z/) {
+			#$ftp->cdup();
+			$log->warn("Report: working with RAW fasta .prep.pep.fa file");
+			#last FILE;
+			get_raw_fasta( { SPEC_PATH => $spec_path, TAXID => $tax_id, PROTEOME => $proteome, FTP => $ftp, %{$param_href} } );
+			next FILE;
+		}
+
+		#skip README and CHECKSUMS files
+	    if ( ($proteome =~ m/README/) or ($proteome =~ m/CHECKSUMS/) or ($proteome =~ m/abinitio\.fa\.gz\z/) ) {
+			$log->trace("Report: skipping $proteome");
+			next FILE;
+		}
+
+		my $local_file;
+	    if ($proteome =~ m/fa\.gz\z/) {
+			$local_file = path($OUT, $proteome);
+		}
+
+		#delete gzip file if it exists
+		if (-f $local_file) {
+			unlink $local_file and $log->warn( "Action: unlinked $local_file" );
+		}
+
+		#opens a filehandle to $OUT dir and downloads file there
+		#Net::FTP get(REMOTE_FILE, LOCAL_FILE) accepts filehandle as LOCAL_FILE.
+		open my $local_fh, ">", $local_file or $log->logdie( "Can't write to $local_file:$!" );
+		$ftp->get($proteome, $local_fh) and $log->info( "Action: download to $local_file" );
+
+		#print stats and go up 2 dirs
+        my $stat_file = path($OUT)->parent;
+        $stat_file = path( $stat_file, 'statistics_ensembl_all.txt' )->canonpath;
+        if ( -f $stat_file ) {
+            $log->trace("Action: STAT file:$stat_file already exists: appending");
+        }
+        open my $stat_fh, '>>', $stat_file or die "can't open file: $!";
+		print {$stat_fh} path($REMOTE_HOST, $REMOTE_DIR, $spec_path, $proteome), "\t", $local_file, "\t";
+		$ftp->cdup();   #go up one dir only to $REMOTE_DIR (cdup = current dir up)
+
+		#extract file from archive
+		my $ae = Archive::Extract->new( archive => "$local_file" );
+		my $ae_path;
+		my $ok = do {
+			$ae->extract(to => $OUT) or $log->logdie( $ae->error );
+			my $ae_file = $ae->files->[0];
+			$ae_path = path($OUT, $ae_file);
+			$log->info( "Action: extracted to $ae_path" );
+		};
+		#delete gziped file
+		unlink $local_file and $log->trace( qq|Action: unlinked $local_file| );
+
+
+		#BLOCK for writing proteomes to taxid file
+		{
+			open my $extracted_fh, "<", $ae_path  or $log->logdie( "Can't open $ae_path: $!" );
+			my $path_taxid = path($OUT, $tax_id);
+	    	open my $genome_ti_fh, ">", $path_taxid or $log->logdie( "Can't write $tax_id: $!" );
+	    	
+	    	#return $/ value to newline for $header_first_line
+	    	local $/ = "\n";
+	    	my $header_first_line = <$extracted_fh>;
+	    	print {$stat_fh} $header_first_line, "\t";
+	    	
+	    	#return to start of file
+	    	seek $extracted_fh, 0, 0;
+
+	    	#look in larger chunks between records
+	    	local $/ = ">";
+	    	my $line_count = 0;
+	    	while (<$extracted_fh>) {
+				chomp;
+	    		$line_count++;
+	
+	    		if (m/\A([^\h]+)(?:\h+)*(?:[^\v]+)*\v(.+)/s) {
+	
+					my $header = $1;
+	
+					my $fasta_seq = $2;
+	    			$fasta_seq =~ s/\R//g;  #delete multiple newlines (also forgets %+ hash)
+					$fasta_seq =~ s/[+* -._]//g;
+					$fasta_seq =~ s/\d+//;
+					$fasta_seq = uc $fasta_seq;
+	  
+	    			print $genome_ti_fh ('>', $header, "\n", $fasta_seq, "\n");
+				}
+			}   #end while
+
+			if ($line_count) {
+				$line_count--;   #it has one line to much
+				$log->debug( qq|Action: saved to $path_taxid with $line_count lines| );
+				print {$stat_fh} $line_count, "\n";
+			}
+		}   #block writing proteomes to taxid end
+
+		unlink $ae_path and $log->trace( qq|Action: unlinked $ae_path| );
+		
+		#skip all other files
+		$log->warn("Report: skippping all other files");
+		last FILE;   #hack for multiple files
+	}   #foreach FILE end
+
+	return;
+
+}
+
+
+### INTERNAL UTILITY ###
+# Usage      : get_raw_fasta( { SPEC_PATH => $spec_path, TAXID => $tax_id, PROTEOME => $proteome, FTP => $ftp, %{$param_href} } );
+# Purpose    : downloads proteomes from Ensembl PRE (only .fa files)
+# Returns    : nothing
+# Parameters : hash_ref
+# Throws     : 
+# Comments   : it reconnects - usable for long downloads
+# See Also   : calling sub -> ftp_get_pre()
+sub get_raw_fasta {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('get_raw_fasta() needs a $param_href') unless @_ == 1;
+
+    my ($param_href) = @_;
+
+    my $OUT = $param_href->{OUT} or $log->logcroak('no $OUT specified on command line!');
+    my $ftp = $param_href->{FTP} or $log->logcroak('no $ftp sent to get_raw_fasta!');
+    my $REMOTE_HOST = $param_href->{REMOTE_HOST} //= 'ftp.ensembl.org';
+    my $REMOTE_DIR  = $param_href->{REMOTE_DIR}  //= 'pub/current_fasta/';
+    my $proteome  = $param_href->{PROTEOME}  or $log->logcroak('no $proteome sent to get_raw_fasta!');
+    my $spec_path = $param_href->{SPEC_PATH} or $log->logcroak('no $spec_path sent to get_raw_fasta!');
+    my $tax_id    = $param_href->{TAXID}     or $log->logcroak('no $tax_id sent to get_raw_fasta!');
+
+    my $local_file = path( $OUT, $proteome );
+
+    #opens a filehandle to $OUT dir and downloads file there
+    #Net::FTP get(REMOTE_FILE, LOCAL_FILE) accepts filehandle as LOCAL_FILE.
+    open my $local_fh, ">", $local_file or $log->logdie("Can't write to $local_file:$!");
+    $ftp->get( $proteome, $local_fh ) and $log->info("Action: download to $local_file");
+
+    #print stats and go up 2 dirs
+    my $stat_file = path($OUT)->parent;
+    $stat_file = path( $stat_file, 'statistics_ensembl_all.txt' )->canonpath;
+    if ( -f $stat_file ) {
+        $log->trace("Action: STAT file:$stat_file already exists: appending");
+    }
+    open my $stat_fh, '>>', $stat_file or die "can't open file: $!";
+    print {$stat_fh} path( $REMOTE_HOST, $REMOTE_DIR, $spec_path, $proteome ), "\t", $local_file, "\t";
+    $ftp->cdup();    #go up one dir only to $REMOTE_DIR (cdup = current dir up)
+
+    #BLOCK for writing proteomes to taxid file
+    {
+        open my $downloaded_fh, "<", $local_file or $log->logdie("Can't open $local_file: $!");
+        my $path_taxid = path( $OUT, $tax_id );
+        open my $genome_ti_fh, ">", $path_taxid or $log->logdie("Can't write $tax_id: $!");
+
+        #return $/ value to newline for $header_first_line
+        local $/ = "\n";
+        my $header_first_line = <$downloaded_fh>;
+        print {$stat_fh} $header_first_line, "\t";
+
+        #return to start of file
+        seek $downloaded_fh, 0, 0;
+
+        #look in larger chunks between records
+        local $/ = ">";
+        my $line_count = 0;
+        while (<$downloaded_fh>) {
+            chomp;
+            $line_count++;
+
+            if (m/\A([^\h]+)(?:\h+)*(?:[^\v]+)*\v(.+)/s) {
+
+                my $header = $1;
+
+                my $fasta_seq = $2;
+                $fasta_seq =~ s/\R//g;    #delete multiple newlines (also forgets %+ hash)
+                $fasta_seq =~ s/[+* -._]//g;
+                $fasta_seq =~ s/\d+//;
+                $fasta_seq = uc $fasta_seq;
+
+                print $genome_ti_fh ( '>', $header, "\n", $fasta_seq, "\n" );
+            }
+        }    #end while
+
+        if ($line_count) {
+            $line_count--;    #it has one line to much
+            $log->debug(qq|Action: saved to $path_taxid with $line_count lines|);
+            print {$stat_fh} $line_count, "\n";
+        }
+
+		#unlink downloaded fasta file
+		if (-f $local_file) {
+			unlink $local_file and $log->error("Action: fasta file:$local_file unlinked");
+		}
+    }    #block writing proteomes to taxid end
+
+    return;
+
+}
+
 
 
 ### INTERNAL UTILITY ###
@@ -4013,6 +4292,9 @@ sub make_db_dirs {
 
     my @dirs = qw(
       data/ensembl_ftp
+      data/ensembl_vertebrates
+      data/ensembl_pre
+      data/ensembl_all
       data/nr_raw
       data/nr_genomes
       data/all_genomes
@@ -4204,7 +4486,7 @@ For help write:
  #download protists, fungi, metazoa and bacteria (21085)
  perl ./lib/CollectGenomes.pm --mode=ensembl_ftp --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/ensembl_ftp/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
  #download vertebrates
- #need to scrape HTML to get to taxids in order to download vertebrates from Ensembl (+78 = total 21163)
+ #need to scrape HTML to get to taxids in order to download vertebrates from Ensembl (+78 = total 21163) downloaded 69 (9 still on PRE)
  perl ./lib/CollectGenomes.pm --mode=ensembl_vertebrates --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/ensembl_vertebrates/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.soc
  
  ### Part II -> download genomes from NCBI:
