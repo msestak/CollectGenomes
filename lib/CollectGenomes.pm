@@ -4486,8 +4486,14 @@ For help write:
  #download protists, fungi, metazoa and bacteria (21085)
  perl ./lib/CollectGenomes.pm --mode=ensembl_ftp --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/ensembl_ftp/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
  #download vertebrates
- #need to scrape HTML to get to taxids in order to download vertebrates from Ensembl (+78 = total 21163) downloaded 69 (9 still on PRE)
- perl ./lib/CollectGenomes.pm --mode=ensembl_vertebrates --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/ensembl_vertebrates/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.soc
+ #need to scrape HTML to get to taxids in order to download vertebrates from Ensembl (+78 = total 21163) downloaded 67 vertebrates + 2 (S.cerevisiae and C. elegans) + 27 PRE (but duplicates (real 11))
+ perl ./lib/CollectGenomes.pm --mode=ensembl_vertebrates --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/ensembl_vertebrates/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ #copy ensembl proteomes to all (7 min)
+ time cp ./ensembl_ftp/* ./ensembl_all/
+ cp -i ./ensembl_vertebrates/* ./ensembl_all/
+ cp: overwrite `./ensembl_all/4932'? y
+ cp: overwrite `./ensembl_all/6239'? y
+
  
  ### Part II -> download genomes from NCBI:
  #download NCBI nr protein fasta file with gi_taxid_prot and taxdump
@@ -4504,11 +4510,13 @@ For help write:
 
 
 
+
  ALTERNATIVE with Deep:
  perl ./lib/CollectGenomes.pm --mode=create_db -ho localhost -d nr_2015_9_2 -p msandbox -u msandbox -po 5626 -s /tmp/mysql_sandbox5626.sock
  perl ./lib/CollectGenomes.pm --mode=gi_taxid -if /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/gi_taxid_prot.dmp.gz -o ./t/nr/ -ho localhost -u msandbox -p msandbox -d nr_2015_9_2 --port=5626 --socket=/tmp/mysql_sandbox5626.sock --engine=Deep
  perl ./lib/CollectGenomes.pm --mode=extract_and_load_nr -if /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/nr.gz -o ./t/nr/ -ho localhost -u msandbox -p msandbox -d nr_2015_9_2 --port=5626 --socket=/tmp/mysql_sandbox5626.sock --engine=Deep
-
+ #copy missing tables to other MySQL server
+ mysqldump nr_2015_9_2 species_ensembl_divisions -u msandbox -p'msandbox' --single-transaction --port=5625 --socket=/tmp/mysql_sandbox5625.sock | mysql -D nr_2015_9_2 -u msandbox -p'msandbox' --port=5626 --socket=/tmp/mysql_sandbox5626.sock
 
 
 
