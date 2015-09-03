@@ -1172,8 +1172,8 @@ sub extract_and_load_nr {
     	fasta MEDIUMTEXT NOT NULL,
     	PRIMARY KEY(gi)
     	)ENGINE=$ENGINE CHARSET=ascii }, $dbh->quote_identifier($table) );
-		say $create_query;
 		create_table( { TABLE_NAME => $table, DBH => $dbh, QUERY => $create_query, %{$param_href} } );
+		$log->trace("Report: $create_query");
 
 		#import table
     	my $load_query = qq{
@@ -1314,7 +1314,7 @@ sub extract_and_load_gi_taxid {
 		KEY(ti)
     	)ENGINE=$ENGINE CHARSET=ascii }, $dbh->quote_identifier($table) );
 		create_table( { TABLE_NAME => $table, DBH => $dbh, QUERY => $create_query, %{$param_href} } );
-		say $create_query;
+		$log->trace("Report: $create_query");
 
 		#import table
     	my $load_query = qq{
@@ -4074,9 +4074,13 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
 
 =head1 SYNOPSIS
 
- Part I -> download genomes from Ensembl:
+ Part 0 -> prepare the stage:
 
  perl ./lib/CollectGenomes.pm --mode=create_db -ho localhost -d nr -p msandbox -u msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+
+ perl ./lib/CollectGenomes.pm --mode=make_db_dirs -o /home/msestak/dropbox/Databases/db_02_09_2015/ -if /home/msestak/dropbox/Databases/db_29_07_15/doc/update_phylogeny_martin7.tsv
+
+ Part I -> download genomes from Ensembl:
 
  perl ./lib/CollectGenomes.pm --mode=ensembl_ftp --out=./ensembl_ftp/ -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
@@ -4187,6 +4191,37 @@ For help write:
 
 =head1 EXAMPLE 02.09.2015 on tiktaalik
 
+ ### Part 0 -> prepare the stage:
+ #create a MySQL database named with date
+ perl ./lib/CollectGenomes.pm --mode=create_db -ho localhost -d nr_2015_9_2 -p msandbox -u msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ #create a collection of directories inside a db directory (manually created) to store all db files and preparation
+ #also copies update_phylogeny file which is manually curated
+ perl ./lib/CollectGenomes.pm --mode=make_db_dirs -o /home/msestak/dropbox/Databases/db_02_09_2015/ -if /home/msestak/dropbox/Databases/db_29_07_15/doc/update_phylogeny_martin7.tsv
+
+ ### Part I -> download genomes from Ensembl:
+ #download protists, fungi, metazoa and bacteria
+ perl ./lib/CollectGenomes.pm --mode=ensembl_ftp --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/ensembl_ftp/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ #download vertebrates
+ 
+ ### Part II -> download genomes from NCBI:
+ #download NCBI nr protein fasta file with gi_taxid_prot and taxdump
+ perl ./lib/CollectGenomes.pm --mode=nr_ftp -o /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/ -rh ftp.ncbi.nih.gov -rd /blast/db/FASTA/ -rf nr.gz
+ perl ./lib/CollectGenomes.pm --mode=nr_ftp -o /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/ -rh ftp.ncbi.nih.gov -rd /pub/taxonomy/ -rf gi_taxid_prot.dmp.gz
+ #taxdmp is needed for names and nodes files (phylogeny information)
+ perl ./lib/CollectGenomes.pm --mode=nr_ftp -o /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/ -rh ftp.ncbi.nih.gov -rd /pub/taxonomy/ -rf taxdump.tar.gz
+
+ ### Part III -> load nr into database:
+ #load gi_taxid_prot to connect gi from nr and ti from gi_taxid_prot
+ perl ./lib/CollectGenomes.pm --mode=gi_taxid -if /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/gi_taxid_prot.dmp.gz -o ./t/nr/ -ho localhost -u msandbox -p msandbox -d nr_2015_9_2 --port=5625 --socket=/tmp/mysql_sandbox5625.sock --engine=TokuDB
+ perl ./lib/CollectGenomes.pm --mode=extract_and_load_nr -if /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/nr.gz -o ./t/nr/ -ho localhost -u msandbox -p msandbox -d nr_2015_9_2 --port=5625 --socket=/tmp/mysql_sandbox5625.sock --engine=TokuDB
+
+
+
+
+ ALTERNATIVE with Deep:
+ perl ./lib/CollectGenomes.pm --mode=create_db -ho localhost -d nr_2015_9_2 -p msandbox -u msandbox -po 5626 -s /tmp/mysql_sandbox5626.sock
+ perl ./lib/CollectGenomes.pm --mode=gi_taxid -if /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/gi_taxid_prot.dmp.gz -o ./t/nr/ -ho localhost -u msandbox -p msandbox -d nr_2015_9_2 --port=5626 --socket=/tmp/mysql_sandbox5626.sock --engine=Deep
+ perl ./lib/CollectGenomes.pm --mode=extract_and_load_nr -if /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/nr.gz -o ./t/nr/ -ho localhost -u msandbox -p msandbox -d nr_2015_9_2 --port=5626 --socket=/tmp/mysql_sandbox5626.sock --engine=Deep
 
 
 
