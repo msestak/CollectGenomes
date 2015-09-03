@@ -3328,10 +3328,10 @@ sub del_virus_from_nr {
 
 	#DELETE nr table based on phylo tables of viruses, viroids,other and unclassified sequences
     my %tis_to_del = (
-        12884 => 'Viroids',
-        10239 => 'Viruses',
+		#12884 => 'Viroids',
+		#10239 => 'Viruses',
         28384 => 'other sequences',
-        12908 => 'unclassified sequences',
+		#12908 => 'unclassified sequences',
     );
 
 	while (my ($ti, $division) = each %tis_to_del) {
@@ -3804,7 +3804,7 @@ sub import_raw_names {
 		$dbh->do($query) if $count;   #insert remaining rows
 		$inserted += $count;
 		$log->trace("Action: imported $count rows");
-		$log->info("Action: inserted $inserted rows to nodes:$table");
+		$log->info("Action: inserted $inserted rows to names:$table");
 
     }   #end block and end of local $/
 
@@ -4501,22 +4501,82 @@ For help write:
  perl ./lib/CollectGenomes.pm --mode=nr_ftp -o /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/ -rh ftp.ncbi.nih.gov -rd /pub/taxonomy/ -rf gi_taxid_prot.dmp.gz
  #taxdmp is needed for names and nodes files (phylogeny information)
  perl ./lib/CollectGenomes.pm --mode=nr_ftp -o /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/ -rh ftp.ncbi.nih.gov -rd /pub/taxonomy/ -rf taxdump.tar.gz
+ [msestak@tiktaalik nr_raw]$ tar -xzvf taxdump.tar.gz
+ [msestak@tiktaalik nr_raw]$ rm citations.dmp delnodes.dmp gc.prt merged.dmp gencode.dmp
 
  ### Part III -> load nr into database:
  #load gi_taxid_prot to connect gi from nr and ti from gi_taxid_prot
  perl ./lib/CollectGenomes.pm --mode=gi_taxid -if /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/gi_taxid_prot.dmp.gz -o ./t/nr/ -ho localhost -u msandbox -p msandbox -d nr_2015_9_2 --port=5625 --socket=/tmp/mysql_sandbox5625.sock --engine=TokuDB
  perl ./lib/CollectGenomes.pm --mode=extract_and_load_nr -if /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/nr.gz -o ./t/nr/ -ho localhost -u msandbox -p msandbox -d nr_2015_9_2 --port=5625 --socket=/tmp/mysql_sandbox5625.sock --engine=TokuDB
 
+ ### Part IV -> set phylogeny for focal species:
 
+ perl ./lib/CollectGenomes.pm --mode=import_raw_names -if /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/names.dmp -o /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=TokuDB
+ #Action: inserted 1987756 rows to names:names_dmp in 81 sec (24540 rows/sec)
+ #PRUNING partI: excluded Phages, Viruses, Sythetic and Environmental samples while loading nodes_dmp
+ perl ./lib/CollectGenomes.pm --mode=import_raw_nodes -if /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/nodes.dmp -o /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=TokuDB
+ #Action: inserted 1124194 rows to nodes:nodes_dmp in 45 sec (24982 rows/s)
+ [msestak@tiktaalik db_02_09_2015]$ MakeTree -m ./data/nr_raw/names_raw_2015_9_3 -n ./data/nr_raw/nodes_raw_2015_9_3 -i ./doc/update_phylogeny_martin7.tsv -d 3 -s ./doc/ensembl -t 6072 | TreeIlustrator.pl
+ Eumetazoa[6072]
+ ├─Placozoa[10226]
+ │ └─Trichoplax[10227]
+ │   └─Trichoplax_adhaerens[10228]
+ └─Cnidaria/Bilateria[1708696]
+   ├─Cnidaria[6073]
+   │ ├─Medusozoa[1708697]
+   │ └─Anthozoa[6101]
+   └─Bilateria[33213]
+     ├─Deuterostomia[33511]
+     └─Protostomia[33317]
+
+ ---------------------------------------------
+ Modified names and nodes file can be found in :
+ ---------------------------------------------
+
+ Nodes: ./data/nr_raw/nodes_raw_2015_9_3.new
+ Names: ./data/nr_raw/names_raw_2015_9_3.new
+ 
+ perl ./lib/CollectGenomes.pm --mode=import_names -if /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/names_raw_2015_9_3.new -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=TokuDB
+ perl ./lib/CollectGenomes.pm --mode=import_nodes -if /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/nodes_raw_2015_9_3.new -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=TokuDB
+
+ perl ./lib/CollectGenomes.pm -mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_raw_2015_9_3_new -t 7955 -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v --engine=TokuDB
+ perl ./lib/CollectGenomes.pm -mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_raw_2015_9_3_new -t 28384 -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v --engine=TokuDB
 
 
 
  ALTERNATIVE with Deep:
  perl ./lib/CollectGenomes.pm --mode=create_db -ho localhost -d nr_2015_9_2 -p msandbox -u msandbox -po 5626 -s /tmp/mysql_sandbox5626.sock
  perl ./lib/CollectGenomes.pm --mode=gi_taxid -if /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/gi_taxid_prot.dmp.gz -o ./t/nr/ -ho localhost -u msandbox -p msandbox -d nr_2015_9_2 --port=5626 --socket=/tmp/mysql_sandbox5626.sock --engine=Deep
+ #File /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/gi_taxid_prot.dmp.gz has 223469419 lines!
+ #File /home/msestak/gitdir/CollectGenomes/t/nr/gi_taxid_prot_Deep written with 223469419 lines!
+ #import inserted 223469419 rows! in 3381 sec (66095 rows/sec)
+ 
  perl ./lib/CollectGenomes.pm --mode=extract_and_load_nr -if /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/nr.gz -o ./t/nr/ -ho localhost -u msandbox -p msandbox -d nr_2015_9_2 --port=5626 --socket=/tmp/mysql_sandbox5626.sock --engine=Deep
+ #File /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/nr.gz has 70614921 lines!
+ #File /home/msestak/gitdir/CollectGenomes/t/nr/nr_2015_9_3_Deep written with 211434339 lines!
+ #import inserted 211434339 rows! in 20447 sec (10340 rows/sec)
  #copy missing tables to other MySQL server
  mysqldump nr_2015_9_2 species_ensembl_divisions -u msandbox -p'msandbox' --single-transaction --port=5625 --socket=/tmp/mysql_sandbox5625.sock | mysql -D nr_2015_9_2 -u msandbox -p'msandbox' --port=5626 --socket=/tmp/mysql_sandbox5626.sock
+ perl ./lib/CollectGenomes.pm --mode=ti_gi_fasta -d nr_2015_9_2 -ho localhost -u msandbox -p msandbox --port=5626 --socket=/tmp/mysql_sandbox5626.sock --engine=Deep
+
+ ### Part IV -> set phylogeny for focal species:
+
+ perl ./lib/CollectGenomes.pm --mode=import_raw_names -if /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/names.dmp -o /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5626 -s /tmp/mysql_sandbox5626.sock --engine=Deep
+ #Action: inserted 1987756 rows to names:names_dmp in 69 sec (28808 rows/sec)
+ perl ./lib/CollectGenomes.pm --mode=import_raw_nodes -if /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/nodes.dmp -o /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5626 -s /tmp/mysql_sandbox5626.sock --engine=Deep
+ #Action: inserted 1124194 rows to nodes:nodes_dmp in 31 sec (36264 rows/s)
+ perl ./lib/CollectGenomes.pm --mode=import_names -if /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/names_raw_2015_9_3.new -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5626 -s /tmp/mysql_sandbox5626.sock --engine=Deep
+ perl ./lib/CollectGenomes.pm --mode=import_nodes -if /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/nodes_raw_2015_9_3.new -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5626 -s /tmp/mysql_sandbox5626.sock --engine=Deep
+
+ perl ./lib/CollectGenomes.pm -mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_raw_2015_9_3_new -t 7955 -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5626 -s /tmp/mysql_sandbox5626.sock -v --engine=Deep
+ perl ./lib/CollectGenomes.pm -mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_raw_2015_9_3_new -t 28384 -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5626 -s /tmp/mysql_sandbox5626.sock -v --engine=Deep
+
+
+ #PRUNING partII: delete rest of Other sequences (most deleted in loading raw nodes - Synthetic)
+ perl ./lib/CollectGenomes.pm -mode=del_virus_from_nr -tbl nr=gi_taxid_prot_TokuDB -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v
+ #PRUNING partIII: delete all taxids that are present in gi_ti_prot_dmp table but not in updated nodes table
+ #also delete all taxids which are not leaf nodes (species)
+
 
 
 
