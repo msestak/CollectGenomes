@@ -44,6 +44,7 @@ our @EXPORT_OK = qw{
 	extract_and_load_nr
     extract_and_load_gi_taxid
 	del_virus_from_nr
+	del_missing_ti
 	ti_gi_fasta
 	get_existing_ti
 	import_names
@@ -129,6 +130,7 @@ sub main {
         extract_and_load_nr           => \&extract_and_load_nr,
         gi_taxid                      => \&extract_and_load_gi_taxid,
 		del_virus_from_nr             => \&del_virus_from_nr,
+		del_missing_ti                => \&del_missing_ti,
         import_names                  => \&import_names,
         import_nodes                  => \&import_nodes,
 		import_raw_names              => \&import_raw_names,
@@ -4335,6 +4337,99 @@ sub make_db_dirs {
 }
 
 
+### INTERFACE SUB ###
+# Usage      : del_missing_ti( $param_href );
+# Purpose    : deletes all taxids not found in nodes_after_MakeTree
+# Returns    : nothing
+# Parameters : ( $param_href )
+# Throws     : croaks for parameters
+# Comments   : first it collects all tis not found in nodes_cleaned
+#            : then it deletes them from gi_taxid_prot (or nr_ti_gi_fasta) table
+# See Also   : 
+sub del_missing_ti {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak( 'del_missing_ti() needs a $param_href' ) unless @_ == 1;
+    my ( $param_href ) = @_;
+
+    my $ENGINE   = defined $param_href->{ENGINE} ? $param_href->{ENGINE} : 'InnoDB';
+    my $DATABASE = $param_href->{DATABASE} or $log->logcroak('no $DATABASE specified on command line!');
+    my %TABLES   = %{ $param_href->{TABLES} } or $log->logcroak('no $TABLES specified on command line!');
+    my $NR_TBL   = $TABLES{nr};
+    my $NODES    = $TABLES{nodes};
+
+    #get new handle
+    my $dbh = dbi_connect($param_href);
+
+	#part I. get tis to delete
+	my $get_tis_q = qq{
+		SELECT DISTINCT gi.ti
+		FROM $NR_TBL AS gi
+		LEFT JOIN $NODES AS nod ON gi.ti = nod.ti
+		WHERE nod.ti IS NULL
+	};
+	my @tis_to_del = map{ $_->[0] } @{ $dbh->selectall_arrayref($get_tis_q) };
+	my $num_ti_found = @tis_to_del;
+	$log->info("Report: Found $num_ti_found missing taxids");
+
+	#delete each ti in gi_taxid_prot table
+	my $del_ti = qq{
+		DELETE gi FROM $NR_TBL AS gi
+		WHERE ti = ?
+		};
+	my $sth = $dbh->prepare($del_ti);
+
+	foreach my $ti (@tis_to_del) {
+	
+		eval { $sth->execute($ti) };
+	
+		my $rows_del = $sth->rows;
+		$log->debug( "Action: table $NR_TBL deleted $rows_del rows for ti:$ti" ) unless $@;
+		$log->error( "Action: deleting $NR_TBL failed for ti:$ti $@" ) if $@;
+	}
+	
+	#slower
+	#while (my ($ti, $division) = each %tis_to_del) {
+
+	#	my $phylo_tbl = 'phylo_' . $ti;
+
+	#	my $delete_cnt = qq{
+	#	DELETE nr FROM $NR_TBL AS nr
+	#	WHERE EXISTS (
+	#		SELECT 1 
+	#		FROM $phylo_tbl AS ph
+	#		WHERE nr.ti = ph.ps1)
+    #	};
+    #	eval { $dbh->do($delete_cnt, { async => 1 } ) };
+
+	#	#check status while running
+	#	{    
+    #	    my $dbh_check         = dbi_connect($param_href);
+    #	    until ( $dbh->mysql_async_ready ) {
+    #	        my $processlist_query = qq{
+    #	        SELECT TIME, STATE FROM INFORMATION_SCHEMA.PROCESSLIST
+    #	        WHERE DB = ? AND INFO LIKE 'DELETE%';
+    #	        };
+    #	        my $sth = $dbh_check->prepare($processlist_query);
+    #	        $sth->execute($DATABASE);
+    #	        my ( $time, $state );
+    #	        $sth->bind_columns( \( $time, $state ) );
+    #	        while ( $sth->fetchrow_arrayref ) {
+    #	            my $process = sprintf( "Time running:%0.3f sec\tSTATE:%s\n", $time, $state );
+    #	            $log->trace( $process );
+    #	            sleep 10;
+    #	        }
+    #	    }
+    #	}    #end check
+
+	#	my $rows_del = $dbh->mysql_async_result;
+    #	$log->debug( "Table $NR_TBL deleted $rows_del rows for {$division}" ) unless $@;
+    #	$log->error( "Deleting $NR_TBL failed for {$division}: $@" ) if $@;
+	#}
+
+	$dbh->disconnect;
+
+	return;
+}
 
 
 
@@ -4546,7 +4641,9 @@ For help write:
 
  perl ./lib/CollectGenomes.pm -mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_raw_2015_9_3_new -t 7955 -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v --engine=TokuDB
  perl ./lib/CollectGenomes.pm -mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_raw_2015_9_3_new -t 28384 -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v --engine=TokuDB
-
+ 
+ #PRUNING partII: delete rest of Other sequences (28384 most deleted in loading raw nodes - Synthetic)
+ perl ./lib/CollectGenomes.pm -mode=del_virus_from_nr -tbl nr=gi_taxid_prot_TokuDB -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v
 
 
  ALTERNATIVE with Deep:
@@ -4578,7 +4675,7 @@ For help write:
 
 
  #PRUNING partII: delete rest of Other sequences (most deleted in loading raw nodes - Synthetic)
- perl ./lib/CollectGenomes.pm -mode=del_virus_from_nr -tbl nr=gi_taxid_prot_TokuDB -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v
+ perl ./lib/CollectGenomes.pm -mode=del_virus_from_nr -tbl nr=gi_taxid_prot_Deep -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5626 -s /tmp/mysql_sandbox5626.sock -v
  #PRUNING partIII: delete all taxids that are present in gi_ti_prot_dmp table but not in updated nodes table
  #also delete all taxids which are not leaf nodes (species)
 
