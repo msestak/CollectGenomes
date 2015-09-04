@@ -4616,6 +4616,10 @@ For help write:
  #PRUNING partI: excluded Phages, Viruses, Sythetic and Environmental samples while loading nodes_dmp
  perl ./lib/CollectGenomes.pm --mode=import_raw_nodes -if /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/nodes.dmp -o /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=TokuDB
  #Action: inserted 1124194 rows to nodes:nodes_dmp in 45 sec (24982 rows/s)
+ 
+ #get list of files for MakeTree
+ perl ./lib/CollectGenomes.pm --mode=get_existing_ti --in=/home/msestak/dropbox/Databases/db_02_09_2015/data/ensembl_all/ --tables names=names_raw_2015_9_3_new -o /home/msestak/dropbox/Databases/db_02_09_2015/doc/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -en=TokuDB
+
  [msestak@tiktaalik db_02_09_2015]$ MakeTree -m ./data/nr_raw/names_raw_2015_9_3 -n ./data/nr_raw/nodes_raw_2015_9_3 -i ./doc/update_phylogeny_martin7.tsv -d 3 -s ./doc/ensembl -t 6072 | TreeIlustrator.pl
  Eumetazoa[6072]
  ├─Placozoa[10226]
@@ -4646,10 +4650,13 @@ For help write:
  perl ./lib/CollectGenomes.pm -mode=del_virus_from_nr -tbl nr=gi_taxid_prot_TokuDB -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v
 
  #PRUNING partIII: delete all taxids that are present in gi_ti_prot_dmp table but not in updated nodes table
- perl ./lib/CollectGenomes.pm -mode=del_missing_ti -tbl nr=gi_taxid_prot_TokuDB -tbl nodes=nodes_raw_2015_9_3_new -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v
+ #also delete all taxids which are not leaf nodes (species)
+ perl ./lib/CollectGenomes.pm -mode=del_missing_ti -tbl nr=gi_taxid_prot_TokuDB -tbl nodes=nodes_raw_2015_9_3_new -tbl names=names_raw_2015_9_3_new -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v
+ #Report: deleted total of 2630957 rows in mode: genera
 
-
-
+ ### Part VI -> combine nr genomes with Ensembl genomes and print them out:
+ #get ensembl tis
+ perl ./lib/CollectGenomes.pm --mode=get_existing_ti --in=./ensembl_ftp/ --tables names=names_martin7 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -en=InnoDB
 
 
 
@@ -4687,8 +4694,9 @@ For help write:
  perl ./lib/CollectGenomes.pm -mode=del_virus_from_nr -tbl nr=gi_taxid_prot_Deep -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5626 -s /tmp/mysql_sandbox5626.sock -v
  #PRUNING partIII: delete all taxids that are present in gi_ti_prot_dmp table but not in updated nodes table
  #also delete all taxids which are not leaf nodes (species)
- perl ./lib/CollectGenomes.pm -mode=del_missing_ti -tbl nr=gi_taxid_prot_Deep -tbl nodes=nodes_raw_2015_9_3_new -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5626 -s /tmp/mysql_sandbox5626.sock -v
-
+ perl ./lib/CollectGenomes.pm -mode=del_missing_ti -tbl nr=gi_taxid_prot_Deep -tbl nodes=nodes_raw_2015_9_3_new -tbl names=names_raw_2015_9_3_new -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5626 -s /tmp/mysql_sandbox5626.sock -v
+ #Report: deleted total of 2630957 rows in mode: genera
+ 
 
 
 
