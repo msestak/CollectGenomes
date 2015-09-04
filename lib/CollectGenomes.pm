@@ -4356,6 +4356,7 @@ sub del_missing_ti {
     my %TABLES   = %{ $param_href->{TABLES} } or $log->logcroak('no $TABLES specified on command line!');
     my $NR_TBL   = $TABLES{nr};
     my $NODES    = $TABLES{nodes};
+    my $NAMES    = $TABLES{names};
 
     #get new handle
     my $dbh = dbi_connect($param_href);
@@ -4378,53 +4379,52 @@ sub del_missing_ti {
 		};
 	my $sth = $dbh->prepare($del_ti);
 
+	my $cnt_del = 0;
 	foreach my $ti (@tis_to_del) {
 	
 		eval { $sth->execute($ti) };
 	
 		my $rows_del = $sth->rows;
+		$cnt_del += $rows_del;
 		$log->debug( "Action: table $NR_TBL deleted $rows_del rows for ti:$ti" ) unless $@;
 		$log->error( "Action: deleting $NR_TBL failed for ti:$ti $@" ) if $@;
 	}
-	
-	#slower
-	#while (my ($ti, $division) = each %tis_to_del) {
 
-	#	my $phylo_tbl = 'phylo_' . $ti;
+	$log->info("Report: deleted total of $cnt_del rows in mode: missing");
 
-	#	my $delete_cnt = qq{
-	#	DELETE nr FROM $NR_TBL AS nr
-	#	WHERE EXISTS (
-	#		SELECT 1 
-	#		FROM $phylo_tbl AS ph
-	#		WHERE nr.ti = ph.ps1)
-    #	};
-    #	eval { $dbh->do($delete_cnt, { async => 1 } ) };
+	#delete all names with single part (genus, division, ...) and keep species names like Homo_sapiens
+	#first get all species_names
+	my $species_q = qq{
+	SELECT DISTINCT gi.ti, na.species_name
+	FROM $NR_TBL AS gi
+	INNER JOIN $NAMES AS na ON gi.ti = na.ti
+    };
+    my %ti_species = map { $_->[0], $_->[1] } @{ $dbh->selectall_arrayref($species_q) };
+	my $cnt_species_pairs = keys %ti_species;
+	$log->info("Report: Found $cnt_species_pairs ti-species_name pairs");
 
-	#	#check status while running
-	#	{    
-    #	    my $dbh_check         = dbi_connect($param_href);
-    #	    until ( $dbh->mysql_async_ready ) {
-    #	        my $processlist_query = qq{
-    #	        SELECT TIME, STATE FROM INFORMATION_SCHEMA.PROCESSLIST
-    #	        WHERE DB = ? AND INFO LIKE 'DELETE%';
-    #	        };
-    #	        my $sth = $dbh_check->prepare($processlist_query);
-    #	        $sth->execute($DATABASE);
-    #	        my ( $time, $state );
-    #	        $sth->bind_columns( \( $time, $state ) );
-    #	        while ( $sth->fetchrow_arrayref ) {
-    #	            my $process = sprintf( "Time running:%0.3f sec\tSTATE:%s\n", $time, $state );
-    #	            $log->trace( $process );
-    #	            sleep 10;
-    #	        }
-    #	    }
-    #	}    #end check
+	my $cnt_sp_del = 0;
+	SPECIES:
+	while (my ($ti, $species) = each %ti_species) {
+		if (! defined $species) {
+			$log->warn("Report: NULL species_name found for ti:$ti");
+			next SPECIES;
+		}
+		if ($species =~ m{\A(?:[^_]+)_(?:.+)\z}g) {
+			#$log->trace("Report: species:$species skipped for ti:$ti");
+			next SPECIES;
+		}
+		else {
+	    	eval { $sth->execute($ti) };
 
-	#	my $rows_del = $dbh->mysql_async_result;
-    #	$log->debug( "Table $NR_TBL deleted $rows_del rows for {$division}" ) unless $@;
-    #	$log->error( "Deleting $NR_TBL failed for {$division}: $@" ) if $@;
-	#}
+			my $rows_sp = $sth->rows;
+			$cnt_sp_del += $rows_sp;
+			$log->debug( "Action: table $NR_TBL deleted $rows_sp rows for species:$species with ti:$ti" ) unless $@;
+			$log->error( "Action: deleting $NR_TBL failed for ti:$ti $@" ) if $@;
+		}
+	}
+
+	$log->info("Report: deleted total of $cnt_sp_del rows in mode: genera");
 
 	$dbh->disconnect;
 
@@ -4645,6 +4645,15 @@ For help write:
  #PRUNING partII: delete rest of Other sequences (28384 most deleted in loading raw nodes - Synthetic)
  perl ./lib/CollectGenomes.pm -mode=del_virus_from_nr -tbl nr=gi_taxid_prot_TokuDB -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v
 
+ #PRUNING partIII: delete all taxids that are present in gi_ti_prot_dmp table but not in updated nodes table
+ perl ./lib/CollectGenomes.pm -mode=del_missing_ti -tbl nr=gi_taxid_prot_TokuDB -tbl nodes=nodes_raw_2015_9_3_new -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v
+
+
+
+
+
+
+
 
  ALTERNATIVE with Deep:
  perl ./lib/CollectGenomes.pm --mode=create_db -ho localhost -d nr_2015_9_2 -p msandbox -u msandbox -po 5626 -s /tmp/mysql_sandbox5626.sock
@@ -4678,7 +4687,7 @@ For help write:
  perl ./lib/CollectGenomes.pm -mode=del_virus_from_nr -tbl nr=gi_taxid_prot_Deep -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5626 -s /tmp/mysql_sandbox5626.sock -v
  #PRUNING partIII: delete all taxids that are present in gi_ti_prot_dmp table but not in updated nodes table
  #also delete all taxids which are not leaf nodes (species)
-
+ perl ./lib/CollectGenomes.pm -mode=del_missing_ti -tbl nr=gi_taxid_prot_Deep -tbl nodes=nodes_raw_2015_9_3_new -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5626 -s /tmp/mysql_sandbox5626.sock -v
 
 
 
