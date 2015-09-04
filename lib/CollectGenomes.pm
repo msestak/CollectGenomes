@@ -3957,6 +3957,7 @@ sub make_db_dirs {
       data/all_genomes
       data/cdhit
       data/jgi
+      data/xml
       doc
       src
     );
@@ -4092,6 +4093,7 @@ sub del_missing_ti {
 # Parameters : $param_href with $OUT
 # Throws     : 
 # Comments   : uses XML::Twig to parse XML file
+#            : creates table that will store info from XML and dispaches internal subs to do all the work
 # See Also   : 
 sub jgi_download {
     my $log = Log::Log4perl::get_logger("main");
@@ -4148,7 +4150,7 @@ sub jgi_download {
 
 ### INTERNAL UTILITY ###
 # Usage      : save_cookie( $param_href );
-# Purpose    : downloads cookie from JGI
+# Purpose    : downloads cookie from JGI and modiefies to for second site (for fungi)
 # Returns    : nothing
 # Parameters : needs $OUT
 # Throws     : 
@@ -4248,15 +4250,18 @@ sub download_phytozome {
 					#my @early_folders= $early_folder_upper->children;
 					#say "LISTING EARLY_FOLDERS:@early_folders";
 
-					list_folders( {FOLDER => $early_folder_upper, %{$param_href} } );
+					list_xml_folders( {FOLDER => $early_folder_upper, %{$param_href} } );
 				}
 			}
 			when(/.+/) {
-				list_folders( { FOLDER => $folder_upper,  %{$param_href} } );
+				list_xml_folders( { FOLDER => $folder_upper,  %{$param_href} } );
 			}
 		}
 	
 	}
+
+	#download proteomes using tis from jgi_download table
+	curl_genomes($param_href);
 }
 
 
@@ -4296,134 +4301,18 @@ sub get_jgi_xml {
     return $xml_name, $xml_path;
 }
 
-### INTERNAL UTILITY ###
-# Usage      : get_jgi_genome( $param_href );
-# Purpose    : downloads genome from JGI, inserts this info to jgi_download table
-#            : and saves genome as taxid if found
-# Returns    : nothing
-# Parameters : needs $OUT
-# Throws     : 
-# Comments   : needed for jgi_download()
-# See Also   : jgi_download()
-sub get_jgi_genome {
-    my $log = Log::Log4perl::get_logger("main");
-    $log->logcroak('get_jgi_genome() needs a $param_href') unless @_ == 1;
-    my ($param_href) = @_;
-
-    my $OUT         = $param_href->{OUT}         or $log->logcroak('no $OUT specified on command line!');
-    my $DATABASE    = $param_href->{DATABASE}    or $log->logcroak('no $DATABASE specified on command line!');
-    my $NAMES       = $param_href->{NAMES}       or $log->logcroak('no $NAMES specified on command line!');
-    my $LABEL       = $param_href->{LABEL}       or $log->logcroak('no $LABEL specified in sub!');
-    my $FILENAME    = $param_href->{FILENAME}    or $log->logcroak('no $FILENAME specified in sub!');
-    my $SIZE        = $param_href->{SIZE}        or $log->logcroak('no $SIZE specified in sub!');
-    my $SIZEINBYTES = $param_href->{SIZEINBYTES} or $log->logcroak('no $SIZEINBYTES specified in sub!');
-    my $TIMESTAMP   = $param_href->{TIMESTAMP}   or $log->logcroak('no $TIMESTAMP specified in sub!');
-    my $PROJECT     = $param_href->{PROJECT}     or $log->logcroak('no $PROJECT specified in sub!');
-    my $MD5         = $param_href->{MD5}         or $log->logcroak('no $MD5 specified in sub!');
-    my $URL         = $param_href->{URL}         or $log->logcroak('no $URL specified in sub!');
-
-    #get new handle
-    my $dbh = dbi_connect($param_href);
-
-	#search by species_name from filename
-	my ($first_letter, $rest) = $FILENAME =~ m{\A(.)([^_]+).+\z};
-	my $species_pattern = $first_letter . '%' . $rest;
-	my $get_species_name = qq{
-	SELECT species_name
-	FROM $NAMES
-	WHERE species_name LIKE '$species_pattern'
-	};
-	my @species = map { $_->[0] } @{ $dbh->selectall_arrayref($get_species_name) };
-
-	#retrieve ti by species_name
-	my $get_ti = qq{
-	SELECT ti
-	FROM $NAMES
-	WHERE species_name = ?
-	};
-	my $sth = $dbh->prepare($get_ti);
-
-	my ($ti, $species);
-	if (scalar @species == 1) {
-		($species) = @species;
-		$sth->execute($species);
-		$sth->bind_col(1, \$ti);
-		$sth->fetchrow_arrayref();
-		$log->info("SPECIES $species with ti:$ti");
-	}
-	else {
-		$species = prompt "which species you want to retrieve",
-			-menu => [@species],
-			-number,
-			">";
-		$sth->execute($species);
-		$sth->bind_col(1, \$ti);
-		$sth->fetchrow_arrayref();
-		$log->info("SPECIES $species with ti:$ti");
-	}
-
-        #insert all info into DB
-        my $select_columns = qq{
-			SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-			WHERE TABLE_SCHEMA = '$DATABASE' AND TABLE_NAME = 'jgi_download' AND ORDINAL_POSITION > 1
-		};
-        my @columns = map { $_->[0] } @{ $dbh->selectall_arrayref($select_columns) };
-
-        #prepare insert
-        my $fieldlist = join ", ", @columns;
-        my $field_placeholders = join ", ", map {'?'} @columns;
-        my $insert_query = sprintf(qq{
-		INSERT INTO jgi_download ( $fieldlist )
-	    VALUES ( $field_placeholders )
-		} );
-        my $sth2 = $dbh->prepare($insert_query);
-
-        my @col_loh;
-        push @col_loh,
-          { label        => $LABEL,
-            filename     => $FILENAME,
-            size         => $SIZE,
-            sizeInBytes  => $SIZEINBYTES,
-            timestamp    => $TIMESTAMP,
-            project      => $PROJECT,
-			md5          => $MD5,
-            url          => $URL,
-            ti           => $ti,
-            species_name => $species,
-          };
-
-        #hash slice - values come in order of columns list
-      INSERT:
-        foreach (@col_loh) {
-            eval { $sth2->execute( @{$_}{@columns} ) };
-            if ($@) {
-                my $species_error = $_->{species_name};
-                $log->error(qq|Report: insert failed for:$species_error (duplicate genome with PRE?)|);
-
-                #say $@;
-                next INSERT;
-            }
-			else {
-				$log->debug("$species inserted with:$ti");
-			}
-            #sth->execute( $_->{species_name}, $_->{ti}, $_->{assembly}, $_->{assembly_accession}, $_->{variation} );
-        }
-
-    return $ti;
-}
-
 
 ### INTERNAL UTILITY ###
-# Usage      : list_folders( $param_href );
+# Usage      : list_xml_folders( $param_href );
 # Purpose    : lists folders with species and grabs files from them
 # Returns    : hash ref of params for get_jgi_genome()
 # Parameters : $param_href
 # Throws     : 
 # Comments   : part of jgi_download mode
 # See Also   : jgi_download()
-sub list_folders {
+sub list_xml_folders {
 	my $log = Log::Log4perl::get_logger("main");
-    $log->logcroak('list_folders() needs a $folder_upper') unless @_ == 1;
+    $log->logcroak('list_xml_folders() needs a $folder_upper') unless @_ == 1;
     my ($param_href) = @_;
 
     my $folder_upper = $param_href->{FOLDER}  or $log->logcroak('no $OUT specified on command line!');
@@ -4496,6 +4385,181 @@ sub list_folders {
 }
 
 
+### INTERNAL UTILITY ###
+# Usage      : get_jgi_genome( $param_href );
+# Purpose    : downloads genome from JGI, inserts this info to jgi_download table
+#            : and saves genome as taxid if found
+# Returns    : nothing
+# Parameters : needs $OUT
+# Throws     : 
+# Comments   : needed for jgi_download()
+# See Also   : jgi_download()
+sub get_jgi_genome {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('get_jgi_genome() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    my $OUT         = $param_href->{OUT}         or $log->logcroak('no $OUT specified on command line!');
+    my $DATABASE    = $param_href->{DATABASE}    or $log->logcroak('no $DATABASE specified on command line!');
+    my $NAMES       = $param_href->{NAMES}       or $log->logcroak('no $NAMES specified on command line!');
+    my $LABEL       = $param_href->{LABEL}       or $log->logcroak('no $LABEL specified in sub!');
+    my $FILENAME    = $param_href->{FILENAME}    or $log->logcroak('no $FILENAME specified in sub!');
+    my $SIZE        = $param_href->{SIZE}        or $log->logcroak('no $SIZE specified in sub!');
+    my $SIZEINBYTES = $param_href->{SIZEINBYTES} or $log->logcroak('no $SIZEINBYTES specified in sub!');
+    my $TIMESTAMP   = $param_href->{TIMESTAMP}   or $log->logcroak('no $TIMESTAMP specified in sub!');
+    my $PROJECT     = $param_href->{PROJECT}     or $log->logcroak('no $PROJECT specified in sub!');
+    my $MD5         = $param_href->{MD5}         or $log->logcroak('no $MD5 specified in sub!');
+    my $URL         = $param_href->{URL}         or $log->logcroak('no $URL specified in sub!');
+
+    #get new handle
+    my $dbh = dbi_connect($param_href);
+
+	#search by species_name from filename
+	my ($first_letter, $rest) = $FILENAME =~ m{\A(.)([^_]+).+\z};
+	my $species_pattern = $first_letter . '%' . $rest;
+	my $get_species_name = qq{
+	SELECT species_name
+	FROM $NAMES
+	WHERE species_name LIKE '$species_pattern'
+	};
+	my @species = map { $_->[0] } @{ $dbh->selectall_arrayref($get_species_name) };
+
+	#retrieve ti by species_name
+	my $get_ti = qq{
+	SELECT ti
+	FROM $NAMES
+	WHERE species_name = ?
+	};
+	my $sth = $dbh->prepare($get_ti);
+
+	my ($ti, $species);
+	if (scalar @species == 0) {
+		$species = prompt "Write (with underscore) species you want to retrieve (SKIP: press ENTER)",
+			">";
+		$ti = prompt "Write ti of species",
+			">";
+		$log->info("RAW SPECIES:$species with ti:$ti");
+	}
+	elsif (scalar @species == 1) {
+		($species) = @species;
+		$sth->execute($species);
+		$sth->bind_col(1, \$ti);
+		$sth->fetchrow_arrayref();
+		$log->info("SPECIES $species with ti:$ti");
+	}
+	else {
+		$species = prompt "which species you want to retrieve",
+			-menu => [@species],
+			-number,
+			">";
+		$sth->execute($species);
+		$sth->bind_col(1, \$ti);
+		$sth->fetchrow_arrayref();
+		$log->info("SPECIES $species with ti:$ti");
+	}
+
+        #insert all info into DB
+        my $select_columns = qq{
+			SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+			WHERE TABLE_SCHEMA = '$DATABASE' AND TABLE_NAME = 'jgi_download' AND ORDINAL_POSITION > 1
+		};
+        my @columns = map { $_->[0] } @{ $dbh->selectall_arrayref($select_columns) };
+
+        #prepare insert
+        my $fieldlist = join ", ", @columns;
+        my $field_placeholders = join ", ", map {'?'} @columns;
+        my $insert_query = sprintf(qq{
+		INSERT INTO jgi_download ( $fieldlist )
+	    VALUES ( $field_placeholders )
+		} );
+        my $sth2 = $dbh->prepare($insert_query);
+
+        my @col_loh;
+        push @col_loh,
+          { label        => $LABEL,
+            filename     => $FILENAME,
+            size         => $SIZE,
+            sizeInBytes  => $SIZEINBYTES,
+            timestamp    => $TIMESTAMP,
+            project      => $PROJECT,
+			md5          => $MD5,
+            url          => $URL,
+            ti           => $ti,
+            species_name => $species,
+          };
+
+        #hash slice - values come in order of columns list
+      INSERT:
+        foreach (@col_loh) {
+            eval { $sth2->execute( @{$_}{@columns} ) };
+            if ($@) {
+                my $species_error = $_->{species_name};
+                $log->error(qq|Report: insert failed for:$species_error (duplicate genome with PRE?)|);
+
+                #say $@;
+                next INSERT;
+            }
+			else {
+				$log->debug("$species inserted with:$ti");
+			}
+            #sth->execute( $_->{species_name}, $_->{ti}, $_->{assembly}, $_->{assembly_accession}, $_->{variation} );
+        }
+
+    return $ti;
+}
+
+
+### INTERNAL UTILITY ###
+# Usage      : curl_genomes( $param_href );
+# Purpose    : downloads genome from JGI using info from jgi_download table
+#            : and saves genome as taxid
+# Returns    : nothing
+# Parameters : needs $OUT
+# Throws     : 
+# Comments   : needed for jgi_download()
+# See Also   : jgi_download()
+sub curl_genomes {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('curl_genomes() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    my $OUT      = $param_href->{OUT}      or $log->logcroak('no $OUT specified on command line!');
+    my $DATABASE = $param_href->{DATABASE} or $log->logcroak('no $DATABASE specified on command line!');
+    my $cookie_path = path( $OUT, 'cookie_jgi' );
+
+    #get new handle
+    my $dbh = dbi_connect($param_href);
+
+    #search by species_name from filename
+    my $get_species = qq{
+	SELECT ti, species_name, url, filename
+	FROM jgi_download
+	};
+    my %ti_species = map { $_->[0], [ $_->[1], $_->[2], $_->[3] ] } @{ $dbh->selectall_arrayref($get_species) };
+    my $cnt_species_pairs = keys %ti_species;
+    $log->info("Report: Found $cnt_species_pairs ti->[species_name-url-filename] pairs");
+
+  SPECIES:
+    while ( my ( $ti, $species_ref ) = each %ti_species ) {
+        my $species_name = $species_ref->[0];
+        my $url          = $species_ref->[1];
+        my $filename     = $species_ref->[2];
+        my $jgi_out      = path(path($OUT)->parent, 'jgi');
+        my $gzip         = path( $jgi_out, $filename )->canonpath;
+
+        my $cmd = qq{curl $url -b $cookie_path -c $cookie_path > $gzip};
+        my ( $stdout, $stderr, $exit ) = capture_output( $cmd, $param_href );
+        if ( $exit == 0 ) {
+            $log->debug("Action: species: $species_name from JGI saved at $gzip");
+        }
+        else {
+            $log->error("Action: failed to save $gzip from JGI:\n$stderr");
+        }
+
+    }
+
+    return;
+}
 
 
 
