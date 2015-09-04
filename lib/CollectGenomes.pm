@@ -3327,11 +3327,14 @@ sub del_virus_from_nr {
     my $dbh = dbi_connect($param_href);
 
 	#DELETE nr table based on phylo tables of viruses, viroids,other and unclassified sequences
-    my %tis_to_del = (
+	#Viruses deleted in nodes_raw import 
+	#unclassified deleted in MakeTree
+	#only some other sequences left
 		#12884 => 'Viroids',
 		#10239 => 'Viruses',
-        28384 => 'other sequences',
 		#12908 => 'unclassified sequences',
+    my %tis_to_del = (
+        28384 => 'other sequences',
     );
 
 	while (my ($ti, $division) = each %tis_to_del) {
@@ -4293,7 +4296,6 @@ sub make_db_dirs {
     my @dirs = qw(
       data/ensembl_ftp
       data/ensembl_vertebrates
-      data/ensembl_pre
       data/ensembl_all
       data/nr_raw
       data/nr_genomes
@@ -4508,7 +4510,10 @@ For help write:
  #load gi_taxid_prot to connect gi from nr and ti from gi_taxid_prot
  perl ./lib/CollectGenomes.pm --mode=gi_taxid -if /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/gi_taxid_prot.dmp.gz -o ./t/nr/ -ho localhost -u msandbox -p msandbox -d nr_2015_9_2 --port=5625 --socket=/tmp/mysql_sandbox5625.sock --engine=TokuDB
  perl ./lib/CollectGenomes.pm --mode=extract_and_load_nr -if /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/nr.gz -o ./t/nr/ -ho localhost -u msandbox -p msandbox -d nr_2015_9_2 --port=5625 --socket=/tmp/mysql_sandbox5625.sock --engine=TokuDB
-
+ #File /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/nr.gz has 70614921 lines!
+ #File /home/msestak/gitdir/CollectGenomes/t/nr/nr_2015_9_3_TokuDB written with 211434339 lines!
+ #Report: import inserted 211434339 rows! in 28969 sec (7298 rows/sec)
+ 
  ### Part IV -> set phylogeny for focal species:
 
  perl ./lib/CollectGenomes.pm --mode=import_raw_names -if /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/names.dmp -o /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=TokuDB
