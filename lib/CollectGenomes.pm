@@ -3120,6 +3120,122 @@ sub del_nr_genomes {
 
 	say join("\n", @species_names);
 	#get count of genus if there is more than 1 (into hash)
+	my $found_genus_species = '';
+	my %found_hash_cnt;
+	foreach my $species (@species_names) {
+		(my $genus_species = $species) =~ s/\A([^_]+)_([^_]+)_?(.+)*\z/$1_$2/g;
+		say "SPECIES:$species\tGENUS:$genus_species";
+
+		if ($genus_species eq $found_genus_species) {
+			$found_hash_cnt{$genus_species}++;   #add to hash only if found earlier (only duplicates)
+			#say "GENUS:$genus EQ FOUND:$found_genus";
+		}
+		$found_genus_species = $genus_species;   #now found has previous genus
+	}
+	#print Dumper(\%found_hash_cnt);
+	#$VAR1 = {
+	#          'Aphanomyces' => 1
+	#        };
+
+	#now get found species into HoHoA to display them later
+	my (%hohoa);
+	foreach my $species2 (@species_names) {
+		(my $genus_spec = $species2) =~ s/\A([^_]+)_([^_]+)_?(.+)*\z/$1_$2/g;
+		#say "GENUS2:$genus2";
+		if (exists $found_hash_cnt{$genus_spec}) {
+			push @{ $hohoa{$genus_spec}{ $found_hash_cnt{$genus_spec} } }, $species2;   #created HoHoArrays
+
+		}
+	}	
+	#print Dumper(\%hohoa);
+	#$VAR1 = {
+	#          'Aphanomyces' => {
+	#                             '1' => [
+	#                                      'Aphanomyces_astaci',
+	#                                      'Aphanomyces_invadans'
+	#                                    ]
+	#                           }
+	#        };
+
+	#use HoHoA to display species to delete
+	while (my ($key, $inner_hash) = each (%hohoa)) {   #$inner_hash is a ref
+		say Dumper( $inner_hash);
+		#$VAR1 = {
+		#          '1' => [
+		#                   'Aphanomyces_astaci',
+		#                   'Aphanomyces_invadans'
+		#                 ]
+		#        };
+
+		INNER:
+		foreach my $cnt (keys %{$inner_hash} ) {
+			#say "$cnt: @{ $inner_hash->{$cnt}    }";
+
+			#first prompt to see if there is anything to delete (printed by Dumper earlier)
+			my $continue = prompt( "Delete? ", -yn1 );
+			say $continue;
+            if ( $continue eq 'y' ) {
+				#ask to choose species to delete
+				my $species_delete = prompt 'Choose which SPECIES you want to DELETE (single num)',
+				-menu => [ @{ $inner_hash->{$cnt} } ],
+				-number,
+				'>';
+				$log->trace( "DELETING: $species_delete" );
+
+				#DELETE species from nr_base_eu_cnt table (because it is species with strains present)
+				my $delete_species = qq{
+				DELETE nr FROM $NR_CNT_TBL AS nr
+				WHERE species_name = ('$species_delete');
+			    };
+			    eval { $dbh->do($delete_species, { async => 1 } ) };
+				my $rows_del_spec = $dbh->mysql_async_result;
+			    $log->debug( "Table $NR_CNT_TBL deleted $rows_del_spec rows with $species_delete" ) unless $@;
+			    $log->debug( "Deleting $NR_CNT_TBL failed: $@" ) if $@;
+
+				#prompt to redo loop (for multiple delete on same genus)
+				my $redo = prompt( "Redo?", -yns );
+				if ($redo eq 'y') {
+					redo INNER;
+				}
+				else {
+					next INNER;
+				}
+            }
+            elsif ($continue eq 'n') {
+				$log->trace( "In genus $key there is nothing to DELETE!" );
+                next INNER;
+            }
+		}
+	}
+
+	$dbh->disconnect;
+
+	return;
+}
+
+
+sub del_nr_genomes2 {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak( 'del_nr_genomes() needs a $param_href' ) unless @_ == 1;
+    my ( $param_href ) = @_;
+
+	my $DATABASE = $param_href->{DATABASE}    or $log->logcroak( 'no $DATABASE specified on command line!' );
+    my %TABLES   = %{ $param_href->{TABLES} } or $log->logcroak('no $TABLES specified on command line!');
+    my $NR_CNT_TBL   = $TABLES{nr_cnt};
+			
+	#get new handle
+    my $dbh = dbi_connect($param_href);
+
+	#get all species names as array
+    my $species_query = qq{
+    SELECT species_name 
+    FROM $NR_CNT_TBL
+    ORDER BY species_name
+    };
+    my @species_names = map { $_->[0] } @{ $dbh->selectall_arrayref($species_query) };
+
+	say join("\n", @species_names);
+	#get count of genus if there is more than 1 (into hash)
 	my ($found_genus, %found_hash_cnt);
 	foreach my $species (@species_names) {
 		(my $genus = $species) =~ s/\A([^_]+)_(?:.+)\z/$1/g;
@@ -3211,8 +3327,6 @@ sub del_nr_genomes {
 
 	return;
 }
-
-
 ### INTERFACE SUB ###
 # Usage      : del_total_genomes( $param_href );
 # Purpose    : deletes TOTAL species genomes that have subspecies or strain genomes (second step)
@@ -4862,9 +4976,23 @@ For help write:
  ### Part VI -> combine nr genomes with Ensembl genomes and print them out:
  #deletes genomes from nr_cnt table that are present in ti_files (downloaded from Ensembl)
  #it also deletes genoes smaller than 2000 sequences
- perl ./lib/CollectGenomes.pm --mode=get_missing_genomes --tables nr_cnt=nr_ti_gi_fasta_TokuDB_cnt -tbl ti_files=ti_files -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=TokuDB
- #Table nr_ti_gi_fasta_TokuDB_cnt deleted 21139 rows!
-
+ perl ./lib/CollectGenomes.pm --mode=get_missing_genomes --tables nr_cnt=nr_ti_gi_fasta_TokuDB_cnt -tbl ti_files=ti_files -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ #Action: table nr_ti_gi_fasta_Deep_cnt deleted 21139 rows!
+ #Action: table nr_ti_gi_fasta_Deep_cnt deleted 427679 rows!
+ #Report: found 6245 genomes larger than 2000 proteins in table:nr_ti_gi_fasta_Deep_cnt
+ #Report: found 4870 genomes larger than 3000 proteins in table:nr_ti_gi_fasta_Deep_cnt
+ #Report: found 3543 genomes larger than 4000 proteins in table:nr_ti_gi_fasta_Deep_cnt
+ #Report: found 2598 genomes larger than 5000 proteins in table:nr_ti_gi_fasta_Deep_cnt
+ #Report: found 1990 genomes larger than 6000 proteins in table:nr_ti_gi_fasta_Deep_cnt
+ #Report: found 1571 genomes larger than 7000 proteins in table:nr_ti_gi_fasta_Deep_cnt
+ #Report: found 1304 genomes larger than 8000 proteins in table:nr_ti_gi_fasta_Deep_cnt
+ #Report: found 1093 genomes larger than 9000 proteins in table:nr_ti_gi_fasta_Deep_cnt
+ #Report: found 965 genomes larger than 10000 proteins in table:nr_ti_gi_fasta_Deep_cnt
+ #Report: found 620 genomes larger than 15000 proteins in table:nr_ti_gi_fasta_Deep_cnt
+ #Report: found 469 genomes larger than 20000 proteins in table:nr_ti_gi_fasta_Deep_cnt
+ #Report: found 374 genomes larger than 25000 proteins in table:nr_ti_gi_fasta_Deep_cnt
+ #Report: found 26 genomes larger than 300000 proteins in table:nr_ti_gi_fasta_Deep_cnt
+ 
  perl ./lib/CollectGenomes.pm --mode=del_nr_genomes -tbl nr_cnt=nr_ti_gi_fasta_InnoDB_cnt -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
 
