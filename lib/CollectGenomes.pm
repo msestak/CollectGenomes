@@ -2935,7 +2935,6 @@ sub get_missing_genomes {
     $log->logcroak( 'get_missing_genomes() needs a $param_href' ) unless @_ == 1;
     my ( $param_href ) = @_;
 
-    my $ENGINE       = defined $param_href->{ENGINE} ? $param_href->{ENGINE} : 'InnoDB';
     my $DATABASE     = $param_href->{DATABASE} or $log->logcroak('no $DATABASE specified on command line!');
     my %TABLES       = %{ $param_href->{TABLES} };
     my $NR_CNT_TBL   = $TABLES{nr_cnt};
@@ -2965,6 +2964,15 @@ sub get_missing_genomes {
     $log->debug( "Action: table $NR_CNT_TBL deleted $rows_del2 rows!" ) unless $@;
     $log->error( "Action: deleting $NR_CNT_TBL failed: $@" ) if $@;
 
+	my $q = qq{SELECT COUNT(*) FROM $NR_CNT_TBL WHERE genes_cnt >= ?};
+	my $sth = $dbh->prepare($q);
+    foreach my $i (qw/2000 3000 4000 5000 6000 7000 8000 9000 10000 15000 20000 25000 300000/) {
+		$sth->execute($i);
+		my $genome_cnt = $sth->fetchrow_array();
+		$log->info("Report: found $genome_cnt genomes larger than $i proteins in table:$NR_CNT_TBL");
+	}
+	
+	$sth->finish;
 	$dbh->disconnect;
 
 	return;
@@ -4799,7 +4807,8 @@ For help write:
  #Action: import to nr_ti_gi_fasta_TokuDB_cnt inserted 455063 rows in 900 sec 
  
  ### Part VI -> combine nr genomes with Ensembl genomes and print them out:
- #deletes genomes from nnr_cnt table that are present in ti_files (downloaded from Ensembl)
+ #deletes genomes from nr_cnt table that are present in ti_files (downloaded from Ensembl)
+ #it also deletes genoes smaller than 2000 sequences
  perl ./lib/CollectGenomes.pm --mode=get_missing_genomes --tables nr_cnt=nr_ti_gi_fasta_TokuDB_cnt -tbl ti_files=ti_files -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=TokuDB
  #Table nr_ti_gi_fasta_TokuDB_cnt deleted 21139 rows!
 
@@ -4850,6 +4859,14 @@ For help write:
  #perl ./lib/CollectGenomes.pm --mode=nr_genome_counts --tables nr=nr_ti_gi_fasta_Deep --tables names=names_raw_2015_9_3_new -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5626 -s /tmp/mysql_sandbox5626.sock --engine=Deep
  #Action: import to nr_ti_gi_fasta_Deep_cnt inserted 455063 rows in 200 sec
  
+ ### Part VI -> combine nr genomes with Ensembl genomes and print them out:
+ #deletes genomes from nr_cnt table that are present in ti_files (downloaded from Ensembl)
+ #it also deletes genoes smaller than 2000 sequences
+ perl ./lib/CollectGenomes.pm --mode=get_missing_genomes --tables nr_cnt=nr_ti_gi_fasta_TokuDB_cnt -tbl ti_files=ti_files -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=TokuDB
+ #Table nr_ti_gi_fasta_TokuDB_cnt deleted 21139 rows!
+
+ perl ./lib/CollectGenomes.pm --mode=del_nr_genomes -tbl nr_cnt=nr_ti_gi_fasta_InnoDB_cnt -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+
 
  
 
