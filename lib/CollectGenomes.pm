@@ -2952,8 +2952,18 @@ sub get_missing_genomes {
     };
     eval { $dbh->do($delete_cnt, { async => 1 } ) };
 	my $rows_del = $dbh->mysql_async_result;
-    $log->debug( "Table $NR_CNT_TBL deleted $rows_del rows!" ) unless $@;
-    $log->error( "Deleting $NR_CNT_TBL failed: $@" ) if $@;
+    $log->debug( "Action: table $NR_CNT_TBL deleted $rows_del rows!" ) unless $@;
+    $log->error( "Action: deleting $NR_CNT_TBL failed: $@" ) if $@;
+
+	#DELETE genomes smaller than 2000 proteins
+	my $delete_cnt2 = qq{
+	DELETE nr FROM $NR_CNT_TBL AS nr
+	WHERE genes_cnt <= 2000
+    };
+    eval { $dbh->do($delete_cnt2, { async => 1 } ) };
+	my $rows_del2 = $dbh->mysql_async_result;
+    $log->debug( "Action: table $NR_CNT_TBL deleted $rows_del2 rows!" ) unless $@;
+    $log->error( "Action: deleting $NR_CNT_TBL failed: $@" ) if $@;
 
 	$dbh->disconnect;
 
@@ -4608,8 +4618,6 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
 
  perl ./lib/CollectGenomes.pm --mode=gi_taxid -if ./nr/gi_taxid_prot.dmp.gz -o ./nr/ -ho localhost -u msandbox -p msandbox -d nr --port=5625 --socket=/tmp/mysql_sandbox5625.sock --engine=InnoDB
 
- perl ./lib/CollectGenomes.pm --mode=ti_gi_fasta -d nr -ho localhost -u msandbox -p msandbox --port=5625 --socket=/tmp/mysql_sandbox5625.sock --engine=InnoDB
-
  perl ./lib/CollectGenomes.pm --mode=mysqldump -o ./t/nr -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
  Part IV -> set phylogeny for focal species:
@@ -4631,6 +4639,8 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
  perl ./lib/CollectGenomes.pm -mode=del_virus_from_nr -tbl nr=gi_taxid_prot_TokuDB -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v
 
  Part V -> get genomes from nr base:
+
+ perl ./lib/CollectGenomes.pm --mode=ti_gi_fasta -d nr -ho localhost -u msandbox -p msandbox --port=5625 --socket=/tmp/mysql_sandbox5625.sock --engine=InnoDB
 
  perl ./lib/CollectGenomes.pm --mode=nr_genome_counts --tables nr=nr_ti_gi_fasta_InnoDB --tables names=names_martin7 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=InnoDB
 
@@ -4781,10 +4791,19 @@ For help write:
  perl ./lib/CollectGenomes.pm -mode=del_missing_ti -tbl nr=gi_taxid_prot_TokuDB -tbl nodes=nodes_raw_2015_9_3_new -tbl names=names_raw_2015_9_3_new -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v
  #Report: deleted total of 2630957 rows in mode: genera
 
- ### Part VI -> combine nr genomes with Ensembl genomes and print them out:
- #get ensembl tis
- perl ./lib/CollectGenomes.pm --mode=get_existing_ti --in=./ensembl_ftp/ --tables names=names_martin7 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -en=InnoDB
+ ### Part V -> get genomes from nr base:
+ perl ./lib/CollectGenomes.pm --mode=ti_gi_fasta -d nr_2015_9_2 -ho localhost -u msandbox -p msandbox --port=5625 --socket=/tmp/mysql_sandbox5625.sock --engine=TokuDB
+ #Report: import inserted 204044303 rows in 25266 sec (8075 rows/sec)
 
+ perl ./lib/CollectGenomes.pm --mode=nr_genome_counts --tables nr=nr_ti_gi_fasta_TokuDB --tables names=names_raw_2015_9_3_new -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=TokuDB
+ #Action: import to nr_ti_gi_fasta_TokuDB_cnt inserted 455063 rows in 900 sec 
+ 
+ ### Part VI -> combine nr genomes with Ensembl genomes and print them out:
+ #deletes genomes from nnr_cnt table that are present in ti_files (downloaded from Ensembl)
+ perl ./lib/CollectGenomes.pm --mode=get_missing_genomes --tables nr_cnt=nr_ti_gi_fasta_TokuDB_cnt -tbl ti_files=ti_files -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=TokuDB
+ #Table nr_ti_gi_fasta_TokuDB_cnt deleted 21139 rows!
+
+ perl ./lib/CollectGenomes.pm --mode=del_nr_genomes -tbl nr_cnt=nr_ti_gi_fasta_InnoDB_cnt -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
 
 
@@ -4824,6 +4843,16 @@ For help write:
  perl ./lib/CollectGenomes.pm -mode=del_missing_ti -tbl nr=gi_taxid_prot_Deep -tbl nodes=nodes_raw_2015_9_3_new -tbl names=names_raw_2015_9_3_new -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5626 -s /tmp/mysql_sandbox5626.sock -v
  #Report: deleted total of 2630957 rows in mode: genera
  
+ ### Part V -> get genomes from nr base:
+ perl ./lib/CollectGenomes.pm --mode=ti_gi_fasta -d nr_2015_9_2 -ho localhost -u msandbox -p msandbox --port=5626 --socket=/tmp/mysql_sandbox5626.sock --engine=Deep
+ #Report: import inserted 204044303 rows in 5312 sec (38411 rows/sec)
+
+ #perl ./lib/CollectGenomes.pm --mode=nr_genome_counts --tables nr=nr_ti_gi_fasta_Deep --tables names=names_raw_2015_9_3_new -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5626 -s /tmp/mysql_sandbox5626.sock --engine=Deep
+ #Action: import to nr_ti_gi_fasta_Deep_cnt inserted 455063 rows in 200 sec
+ 
+
+ 
+
 
 
 
