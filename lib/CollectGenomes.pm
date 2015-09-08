@@ -4808,9 +4808,42 @@ For help write:
  #it also deletes all genomes having 'group' in name
  #prints report at end
 
- perl ./lib/CollectGenomes.pm --mode=del_nr_genomes -tbl nr_cnt=nr_ti_gi_fasta_InnoDB_cnt -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ perl ./lib/CollectGenomes.pm --mode=del_nr_genomes -tbl nr_cnt=nr_ti_gi_fasta_TokuDB_cnt -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ #deletes genomes with species and strain genomes overlaping (nr only)
+ #Report: found 5928 genomes larger than 2000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 4600 genomes larger than 3000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 3325 genomes larger than 4000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 2404 genomes larger than 5000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 1805 genomes larger than 6000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 1396 genomes larger than 7000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 1139 genomes larger than 8000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 939 genomes larger than 9000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 813 genomes larger than 10000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 501 genomes larger than 15000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 365 genomes larger than 20000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 285 genomes larger than 25000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 3 genomes larger than 300000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ 
+ perl ./lib/CollectGenomes.pm --mode=del_total_genomes -tbl nr_cnt=nr_ti_gi_fasta_TokuDB_cnt -tbl ti_files=ti_files -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -en=TokuDB
+ #imports nr and existing genomes
+ #deletes hybrid genomes
+ #Action: import inserted 5928 rows!
+ #Action: import inserted 21163 rows!
+ #Action: deleted 2 hybrid species from ti_fulllist
+ #Report: found 25063 genomes in table:ti_fulllist
+ 
+ perl ./lib/CollectGenomes.pm --mode=print_nr_genomes -tbl ti_fulllist=ti_fulllist -tbl nr_ti_fasta=nr_ti_gi_fasta_InnoDB -o ./t/nr -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
- perl ./lib/CollectGenomes.pm --mode=del_total_genomes -tbl nr_cnt=nr_ti_gi_fasta_InnoDB_cnt -tbl ti_files=ti_files -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -en=InnoDB
+
+
+
+
+
+
+
+
+
+
 
 
  ALTERNATIVE with Deep:
@@ -4875,7 +4908,8 @@ For help write:
  #Report: found 374 genomes larger than 25000 proteins in table:nr_ti_gi_fasta_Deep_cnt
  #Report: found 26 genomes larger than 300000 proteins in table:nr_ti_gi_fasta_Deep_cnt
  
- perl ./lib/CollectGenomes.pm --mode=del_nr_genomes -tbl nr_cnt=nr_ti_gi_fasta_InnoDB_cnt -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ perl ./lib/CollectGenomes.pm --mode=del_nr_genomes -tbl nr_cnt=nr_ti_gi_fasta_Deep_cnt -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5626 -s /tmp/mysql_sandbox5626.sock
+ #deletes genomes with species and strain genomes overlaping (only nr)
  #Report: found 5928 genomes larger than 2000 proteins in table:nr_ti_gi_fasta_Deep_cnt
  #Report: found 4600 genomes larger than 3000 proteins in table:nr_ti_gi_fasta_Deep_cnt
  #Report: found 3325 genomes larger than 4000 proteins in table:nr_ti_gi_fasta_Deep_cnt
@@ -4890,7 +4924,14 @@ For help write:
  #Report: found 285 genomes larger than 25000 proteins in table:nr_ti_gi_fasta_Deep_cnt
  #Report: found 3 genomes larger than 300000 proteins in table:nr_ti_gi_fasta_Deep_cnt
 
- 
+ perl ./lib/CollectGenomes.pm --mode=del_total_genomes -tbl nr_cnt=nr_ti_gi_fasta_Deep_cnt -tbl ti_files=ti_files -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5626 -s /tmp/mysql_sandbox5626.sock -en=Deep
+ #imports nr and existing genomes
+ #deletes hybrid genomes
+ #Action: import inserted 5928 rows!
+ #Action: import inserted 21163 rows!
+ #Action: deleted 2 hybrid species from ti_fulllist
+ #Report: found 25063 genomes in table:ti_fulllist
+
 
 
 
