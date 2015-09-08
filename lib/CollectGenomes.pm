@@ -3140,13 +3140,12 @@ sub del_nr_genomes {
     };
     my @species_names = map { $_->[0] } @{ $dbh->selectall_arrayref($species_query) };
 
-	#say join("\n", @species_names);
 	#get count of genus if there is more than 1 (into hash)
 	my $found_genus_species = '';
 	my %found_hash_cnt;
 	foreach my $species (@species_names) {
 		(my $genus_species = $species) =~ s/\A([^_]+)_([^_]+)_?(.+)*\z/$1_$2/g;
-		say "SPECIES:$species\tGENUS:$genus_species";
+		#say "SPECIES:$species\tGENUS:$genus_species";
 
 		if ($genus_species eq $found_genus_species) {
 			$found_hash_cnt{$genus_species}++;   #add to hash only if found earlier (only duplicates)
@@ -3242,120 +3241,6 @@ sub del_nr_genomes {
 
 =cut
 
-
-sub del_nr_genomes2 {
-    my $log = Log::Log4perl::get_logger("main");
-    $log->logcroak( 'del_nr_genomes() needs a $param_href' ) unless @_ == 1;
-    my ( $param_href ) = @_;
-
-	my $DATABASE = $param_href->{DATABASE}    or $log->logcroak( 'no $DATABASE specified on command line!' );
-    my %TABLES   = %{ $param_href->{TABLES} } or $log->logcroak('no $TABLES specified on command line!');
-    my $NR_CNT_TBL   = $TABLES{nr_cnt};
-			
-	#get new handle
-    my $dbh = dbi_connect($param_href);
-
-	#get all species names as array
-    my $species_query = qq{
-    SELECT species_name 
-    FROM $NR_CNT_TBL
-    ORDER BY species_name
-    };
-    my @species_names = map { $_->[0] } @{ $dbh->selectall_arrayref($species_query) };
-
-	say join("\n", @species_names);
-	#get count of genus if there is more than 1 (into hash)
-	my ($found_genus, %found_hash_cnt);
-	foreach my $species (@species_names) {
-		(my $genus = $species) =~ s/\A([^_]+)_(?:.+)\z/$1/g;
-		say "SPECIES:$species\tGENUS:$genus";
-
-		if ($genus eq $found_genus) {
-			$found_hash_cnt{$genus}++;   #add to hash only if found earlier (only duplicates)
-			#say "GENUS:$genus EQ FOUND:$found_genus";
-		}
-		$found_genus = $genus;   #now found has previous genus
-	}
-	#print Dumper(\%found_hash_cnt);
-	#$VAR1 = {
-	#          'Aphanomyces' => 1
-	#        };
-
-	#now get found species into HoHoA to display them later
-	my (%hohoa);
-	foreach my $species2 (@species_names) {
-		(my $genus2 = $species2) =~ s/\A([^_]+)_(?:.+)\z/$1/g;
-		#say "GENUS2:$genus2";
-		if (exists $found_hash_cnt{$genus2}) {
-			push @{ $hohoa{$genus2}{ $found_hash_cnt{$genus2} } }, $species2;   #created HoHoArrays
-
-		}
-	}	
-	#print Dumper(\%hohoa);
-	#$VAR1 = {
-	#          'Aphanomyces' => {
-	#                             '1' => [
-	#                                      'Aphanomyces_astaci',
-	#                                      'Aphanomyces_invadans'
-	#                                    ]
-	#                           }
-	#        };
-
-	#use HoHoA to display species to delete
-	while (my ($key, $inner_hash) = each (%hohoa)) {   #$inner_hash is a ref
-		say Dumper( $inner_hash);
-		#$VAR1 = {
-		#          '1' => [
-		#                   'Aphanomyces_astaci',
-		#                   'Aphanomyces_invadans'
-		#                 ]
-		#        };
-
-		INNER:
-		foreach my $cnt (keys %{$inner_hash} ) {
-			#say "$cnt: @{ $inner_hash->{$cnt}    }";
-
-			#first prompt to see if there is anything to delete (printed by Dumper earlier)
-			my $continue = prompt( "Delete? ", -yn1 );
-			say $continue;
-            if ( $continue eq 'y' ) {
-				#ask to choose species to delete
-				my $species_delete = prompt 'Choose which SPECIES you want to DELETE (single num)',
-				-menu => [ @{ $inner_hash->{$cnt} } ],
-				-number,
-				'>';
-				$log->trace( "DELETING: $species_delete" );
-
-				#DELETE species from nr_base_eu_cnt table (because it is species with strains present)
-				my $delete_species = qq{
-				DELETE nr FROM $NR_CNT_TBL AS nr
-				WHERE species_name = ('$species_delete');
-			    };
-			    eval { $dbh->do($delete_species, { async => 1 } ) };
-				my $rows_del_spec = $dbh->mysql_async_result;
-			    $log->debug( "Table $NR_CNT_TBL deleted $rows_del_spec rows with $species_delete" ) unless $@;
-			    $log->debug( "Deleting $NR_CNT_TBL failed: $@" ) if $@;
-
-				#prompt to redo loop (for multiple delete on same genus)
-				my $redo = prompt( "Redo?", -yns );
-				if ($redo eq 'y') {
-					redo INNER;
-				}
-				else {
-					next INNER;
-				}
-            }
-            elsif ($continue eq 'n') {
-				$log->trace( "In genus $key there is nothing to DELETE!" );
-                next INNER;
-            }
-		}
-	}
-
-	$dbh->disconnect;
-
-	return;
-}
 ### INTERFACE SUB ###
 # Usage      : del_total_genomes( $param_href );
 # Purpose    : deletes TOTAL species genomes that have subspecies or strain genomes (second step)
@@ -3429,77 +3314,62 @@ sub del_total_genomes {
     my @species_names = map { $_->[0] } @{ $dbh->selectall_arrayref($species_query) };
 
 	#get count of genus if there is more than 1 (into hash)
-	my ($found_genus, %found_hash_cnt);
+	my $found_genus_species = '';
+	my %found_hash_cnt;
 	foreach my $species (@species_names) {
-		(my $genus = $species) =~ s/\A([^_]+)_(?:.+)\z/$1/g;
-		#say "GENUS:$genus";
+		(my $genus_species = $species) =~ s/\A([^_]+)_([^_]+)_?(.+)*\z/$1_$2/g;
+		#say "SPECIES:$species\tGENUS:$genus_species";
 
-		if ($genus eq $found_genus) {
-			$found_hash_cnt{$genus}++;   #does not track single species genera
-			#say "GENUS:$genus EQ FOUND:$found_genus";
+		if ($genus_species eq $found_genus_species) {
+			$found_hash_cnt{$genus_species}++;   #add to hash only if found earlier (only duplicates)
 		}
-		$found_genus = $genus;   #now found has previous genus
+		$found_genus_species = $genus_species;   #now found has previous genus_species
 	}
-	#print Dumper(\%found_hash_cnt);
-	#$VAR1 = {
-	#          'Aphanomyces' => 1
-	#        };
 
 	#now get found species into HoHoA to display them later
 	my (%hohoa);
 	foreach my $species2 (@species_names) {
-		(my $genus2 = $species2) =~ s/\A([^_]+)_(?:.+)\z/$1/g;
+		(my $genus_spec = $species2) =~ s/\A([^_]+)_([^_]+)_?(.+)*\z/$1_$2/g;
 		#say "GENUS2:$genus2";
-		if (exists $found_hash_cnt{$genus2}) {
-			push @{ $hohoa{$genus2}{ $found_hash_cnt{$genus2} } }, $species2;   #created HoHoArrays
+		if (exists $found_hash_cnt{$genus_spec}) {
+			push @{ $hohoa{$genus_spec}{ $found_hash_cnt{$genus_spec} } }, $species2;   #created HoHoArrays
 		}
-	}	
-	#print Dumper(\%hohoa);
-	#$VAR1 = {
-	#          'Aphanomyces' => {
-	#                             '1' => [
-	#                                      'Aphanomyces_astaci',
-	#                                      'Aphanomyces_invadans'
-	#                                    ]
-	#                           }
-	#        };
+	}
+
+	#print number of duplicates found
+	my $dup_found = keys %hohoa;
+	$log->warn("Report: found $dup_found species complexes to iterate on");
 
 	#use HoHoA to display species to delete
 	while (my ($key, $inner_hash) = each (%hohoa)) {   #$inner_hash is a ref
 		say Dumper( $inner_hash);
-		#$VAR1 = {
-		#          '1' => [
-		#                   'Aphanomyces_astaci',
-		#                   'Aphanomyces_invadans'
-		#                 ]
-		#        };
 
 		INNER:
 		foreach my $cnt (keys %{$inner_hash} ) {
 			#say "$cnt: @{ $inner_hash->{$cnt}    }";
 
-			#first prompt to see if there is anything to delete
+			#first prompt to see if there is anything to delete (printed by Dumper earlier)
 			my $continue = prompt( "Delete? ", -yn1 );
-			say $continue;
+			#say $continue;
             if ( $continue eq 'y' ) {
 				#ask to choose species to delete
 				my $species_delete = prompt 'Choose which SPECIES you want to DELETE (single num)',
 				-menu => [ @{ $inner_hash->{$cnt} } ],
 				-number,
+				-single,
 				'>';
 				$log->trace( "DELETING: $species_delete" );
 
-				#DELETE species from ti_full_list table (because it has species with strains present)
-				#it accepts one num
+				#DELETE species from nr_base_eu_cnt table (because it is species with strains present)
 				my $delete_species = qq{
-				DELETE nr FROM $table_list AS nr
-				WHERE species_name = ('$species_delete')
+				DELETE nr FROM $NR_CNT_TBL AS nr
+				WHERE species_name = ('$species_delete');
 			    };
 			    eval { $dbh->do($delete_species, { async => 1 } ) };
 				my $rows_del_spec = $dbh->mysql_async_result;
-			    $log->debug( "Action: table $table_list deleted $rows_del_spec rows with $species_delete" ) unless $@;
-			    $log->error( "Action: deleting $NR_CNT_TBL failed: $@" ) if $@;
-				
+			    $log->debug( "Action: table $NR_CNT_TBL deleted $rows_del_spec rows with $species_delete" ) unless $@;
+			    $log->debug( "Action: deleting $NR_CNT_TBL failed: $@" ) if $@;
+
 				#prompt to redo loop (for multiple delete on same genus)
 				my $redo = prompt( "Redo?", -yns );
 				if ($redo eq 'y') {
@@ -3515,6 +3385,7 @@ sub del_total_genomes {
             }
 		}
 	}
+
 
 	$dbh->disconnect;
 
