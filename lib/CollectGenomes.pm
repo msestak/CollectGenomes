@@ -2964,6 +2964,28 @@ sub get_missing_genomes {
     $log->debug( "Action: table $NR_CNT_TBL deleted $rows_del2 rows!" ) unless $@;
     $log->error( "Action: deleting $NR_CNT_TBL failed: $@" ) if $@;
 
+	#delete species if it contains group in name
+    my $species_query = qq{
+    SELECT species_name
+    FROM $NR_CNT_TBL
+    ORDER BY species_name
+    };
+    my @species_names = map { $_->[0] } @{ $dbh->selectall_arrayref($species_query) };
+
+	my @groups = grep { /group/ } @species_names;
+	say join ("\n", @groups);
+	my $del_grp = qq{
+	DELETE nr FROM $NR_CNT_TBL AS nr
+	WHERE species_name = ?
+	};
+	my $sth_del = $dbh->prepare($del_grp);
+	foreach my $species_name (@groups) {
+		eval { $sth_del->execute($species_name); };
+		$log->debug("Action: deleted group:$species_name from table:$NR_CNT_TBL") unless $@;
+		$log->error("Action: failed delete for group:$species_name for table:$NR_CNT_TBL") if $@;
+	}
+
+
 	my $q = qq{SELECT COUNT(*) FROM $NR_CNT_TBL WHERE genes_cnt >= ?};
 	my $sth = $dbh->prepare($q);
     foreach my $i (qw/2000 3000 4000 5000 6000 7000 8000 9000 10000 15000 20000 25000 300000/) {
@@ -3162,6 +3184,7 @@ sub del_nr_genomes {
 				my $species_delete = prompt 'Choose which SPECIES you want to DELETE (single num)',
 				-menu => [ @{ $inner_hash->{$cnt} } ],
 				-number,
+				-single,
 				'>';
 				$log->trace( "DELETING: $species_delete" );
 
