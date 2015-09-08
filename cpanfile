@@ -35,5 +35,6 @@ requires 'DateTime::Tiny';
 requires 'XML::Twig';
 
 
+author_requires 'Term::ReadKey';
 author_requires 'Regexp::Debugger';
 

@@ -3118,7 +3118,7 @@ sub del_nr_genomes {
     };
     my @species_names = map { $_->[0] } @{ $dbh->selectall_arrayref($species_query) };
 
-	say join("\n", @species_names);
+	#say join("\n", @species_names);
 	#get count of genus if there is more than 1 (into hash)
 	my $found_genus_species = '';
 	my %found_hash_cnt;
@@ -3128,14 +3128,9 @@ sub del_nr_genomes {
 
 		if ($genus_species eq $found_genus_species) {
 			$found_hash_cnt{$genus_species}++;   #add to hash only if found earlier (only duplicates)
-			#say "GENUS:$genus EQ FOUND:$found_genus";
 		}
-		$found_genus_species = $genus_species;   #now found has previous genus
+		$found_genus_species = $genus_species;   #now found has previous genus_species
 	}
-	#print Dumper(\%found_hash_cnt);
-	#$VAR1 = {
-	#          'Aphanomyces' => 1
-	#        };
 
 	#now get found species into HoHoA to display them later
 	my (%hohoa);
@@ -3144,28 +3139,16 @@ sub del_nr_genomes {
 		#say "GENUS2:$genus2";
 		if (exists $found_hash_cnt{$genus_spec}) {
 			push @{ $hohoa{$genus_spec}{ $found_hash_cnt{$genus_spec} } }, $species2;   #created HoHoArrays
-
 		}
-	}	
-	#print Dumper(\%hohoa);
-	#$VAR1 = {
-	#          'Aphanomyces' => {
-	#                             '1' => [
-	#                                      'Aphanomyces_astaci',
-	#                                      'Aphanomyces_invadans'
-	#                                    ]
-	#                           }
-	#        };
+	}
+	
+	#print number of duplicates found
+	my $dup_found = keys %hohoa;
+	$log->warn("Report: found $dup_found species complexes to iterate on");
 
 	#use HoHoA to display species to delete
 	while (my ($key, $inner_hash) = each (%hohoa)) {   #$inner_hash is a ref
 		say Dumper( $inner_hash);
-		#$VAR1 = {
-		#          '1' => [
-		#                   'Aphanomyces_astaci',
-		#                   'Aphanomyces_invadans'
-		#                 ]
-		#        };
 
 		INNER:
 		foreach my $cnt (keys %{$inner_hash} ) {
@@ -3173,7 +3156,7 @@ sub del_nr_genomes {
 
 			#first prompt to see if there is anything to delete (printed by Dumper earlier)
 			my $continue = prompt( "Delete? ", -yn1 );
-			say $continue;
+			#say $continue;
             if ( $continue eq 'y' ) {
 				#ask to choose species to delete
 				my $species_delete = prompt 'Choose which SPECIES you want to DELETE (single num)',
@@ -3189,8 +3172,8 @@ sub del_nr_genomes {
 			    };
 			    eval { $dbh->do($delete_species, { async => 1 } ) };
 				my $rows_del_spec = $dbh->mysql_async_result;
-			    $log->debug( "Table $NR_CNT_TBL deleted $rows_del_spec rows with $species_delete" ) unless $@;
-			    $log->debug( "Deleting $NR_CNT_TBL failed: $@" ) if $@;
+			    $log->debug( "Action: table $NR_CNT_TBL deleted $rows_del_spec rows with $species_delete" ) unless $@;
+			    $log->debug( "Action: deleting $NR_CNT_TBL failed: $@" ) if $@;
 
 				#prompt to redo loop (for multiple delete on same genus)
 				my $redo = prompt( "Redo?", -yns );
@@ -3212,6 +3195,29 @@ sub del_nr_genomes {
 
 	return;
 }
+
+
+=for Example:
+ $VAR1 = {
+           '2' => [
+                    'Pseudomonas_amygdali',
+                    'Pseudomonas_amygdali_pv._lachrymans',
+                    'Pseudomonas_amygdali_pv._tabaci_str._ATCC_11528'
+                  ]
+         };
+ 
+ Delete? y
+ y
+ Choose which SPECIES you want to DELETE (single num)
+    1. Pseudomonas_amygdali
+    2. Pseudomonas_amygdali_pv._lachrymans
+    3. Pseudomonas_amygdali_pv._tabaci_str._ATCC_11528
+ 
+ > 1
+ [2015/09/07 15:57:09,452]DELETING: Pseudomonas_amygdali
+ [2015/09/07 15:57:09,455]Table nr_ti_gi_fasta_Deep_cnt deleted 1 rows with Pseudomonas_amygdali
+
+=cut
 
 
 sub del_nr_genomes2 {
