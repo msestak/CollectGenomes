@@ -2973,7 +2973,7 @@ sub get_missing_genomes {
     my @species_names = map { $_->[0] } @{ $dbh->selectall_arrayref($species_query) };
 
 	my @groups = grep { /group/ } @species_names;
-	say join ("\n", @groups);
+	#say join ("\n", @groups);
 	my $del_grp = qq{
 	DELETE nr FROM $NR_CNT_TBL AS nr
 	WHERE species_name = ?
@@ -3173,7 +3173,7 @@ sub del_nr_genomes {
 			@spec_search_group = map { /\A$spec(\d+)\z/ ? () : $_} @spec_search_group;   #remove species that is different only in ending number too
 			@spec_search_group = map { /\A$spec([^_]+)\z/ ? () : $_} @spec_search_group; #remove species that is different only in ending letters after _
 			if ( grep { /$spec/ } @spec_search_group) {                       #search for that species among the other species (anywhere in name)
-				$log->trace("Report: found match for:{$spec} in:{@spec_search_group}");
+				#$log->trace("Report: found match for:{$spec} in:{@spec_search_group}");
 				print Dumper(\%hash_to_print);     #print group before delete
 				$log->trace( "Action: deleting:$spec" );
 
@@ -3231,9 +3231,10 @@ sub del_nr_genomes {
 # Parameters : ( $param_href )
 # Throws     : croaks for parameters
 # Comments   : first it creates ti_fulllist table to hold all genomes
+#            : deletes hybrid genomes
 #            : it deletes genomes that have species and strain genomes in full dataset
 #            : (both nr and existing genomes)
-# See Also   : second step
+# See Also   : del_nr_genomes() - first step
 sub del_total_genomes {
     my $log = Log::Log4perl::get_logger("main");
     $log->logcroak( 'del_total_genomes() needs a $param_href' ) unless @_ == 1;
@@ -3265,6 +3266,7 @@ sub del_total_genomes {
     };
 	create_table( { TABLE_NAME => $table_list, DBH => $dbh, QUERY => $create_query, %{$param_href} } );
 
+	#insert NR genomes
     my $insert_nr = qq{
     INSERT INTO $table_list (ti, genes_cnt, species_name)
     SELECT ti, genes_cnt, species_name
@@ -3276,6 +3278,7 @@ sub del_total_genomes {
     $log->debug( "Action: import inserted $rows rows!" ) unless $@;
     $log->error( "Action: loading $table_list failed: $@" ) if $@;
 
+	#insert existing genomes
     my $insert_ti = qq{
     INSERT INTO $table_list (ti, species_name)
     SELECT ti, species_name
@@ -3287,8 +3290,17 @@ sub del_total_genomes {
     $log->debug( "Action: import inserted $rows2 rows!" ) unless $@;
     $log->error( "Action: loading $table_list failed: $@" ) if $@;
 
+	#delete species that are hybrids
+	my $del_hybrid = sprintf( q{
+	DELETE ti FROM %s AS ti
+	WHERE species_name LIKE %s }, $dbh->quote_identifier($table_list), $dbh->quote('%\_x\_%') );
+    #say $del_hybrid;
+	eval { $dbh->do($del_hybrid, { async => 1 } ) };
+	my $rows_hy = $dbh->mysql_async_result;
+	$log->debug( "Action: deleted $rows_hy hybrid species from $table_list") unless $@;
+	$log->error( "Action: table $table_list delete for hybrids failed: $@" ) if $@;
+
 	#SECOND PART: remove superfluous genomes
-	#get all species names as array
     my $species_query = qq{
     SELECT species_name 
     FROM $table_list
@@ -3301,75 +3313,60 @@ sub del_total_genomes {
 	my %found_hash_cnt;
 	foreach my $species (@species_names) {
 		(my $genus_species = $species) =~ s/\A([^_]+)_([^_]+)_?(.+)*\z/$1_$2/g;
-		#say "SPECIES:$species\tGENUS:$genus_species";
 
 		if ($genus_species eq $found_genus_species) {
 			$found_hash_cnt{$genus_species}++;   #add to hash only if found earlier (only duplicates)
 		}
 		$found_genus_species = $genus_species;   #now found has previous genus_species
 	}
+	#print Dumper(\%found_hash_cnt);
 
-	#now get found species into HoHoA to display them later
-	my (%hohoa);
+	#now get found species into hash of arefs to delete them later
+	my (%hoarefs);
 	foreach my $species2 (@species_names) {
 		(my $genus_spec = $species2) =~ s/\A([^_]+)_([^_]+)_?(.+)*\z/$1_$2/g;
-		#say "GENUS2:$genus2";
+
 		if (exists $found_hash_cnt{$genus_spec}) {
-			push @{ $hohoa{$genus_spec}{ $found_hash_cnt{$genus_spec} } }, $species2;   #created HoHoArrays
+			push @{ $hoarefs{$genus_spec} }, $species2;   #created Hash of array refs
 		}
 	}
+	#print Dumper(\%hoarefs);
 
-	#print number of duplicates found
-	my $dup_found = keys %hohoa;
-	$log->warn("Report: found $dup_found species complexes to iterate on");
+	#search for species to delete
+	my $delete_spec = qq{
+		DELETE ti FROM $table_list AS ti
+		WHERE species_name = ?;
+	};
+	my $sth_del = $dbh->prepare($delete_spec, { async => 1 } );
 
-	#use HoHoA to display species to delete
-	while (my ($key, $inner_hash) = each (%hohoa)) {   #$inner_hash is a ref
-		say Dumper( $inner_hash);
+	while (my ($spec_key, $grp_aref) = each %hoarefs) {
+		my @spec_group = @{ $grp_aref };   #full group here
+		my %hash_to_print = ($spec_key => $grp_aref);
+		foreach my $spec (@{ $grp_aref }) {
+			my @spec_search_group = map { /\A$spec\z/ ? () : $_} @spec_group;            #remove only species that is exactly the same
+			@spec_search_group = map { /\A$spec(\d+)\z/ ? () : $_} @spec_search_group;   #remove species that is different only in ending number too
+			@spec_search_group = map { /\A$spec([^_]+)\z/ ? () : $_} @spec_search_group; #remove species that is different only in ending letters after _
+			if ( grep { /$spec/ } @spec_search_group) {                       #search for that species among the other species (anywhere in name)
+				#$log->trace("Report: found match for:{$spec} in:{@spec_search_group}");
+				print Dumper(\%hash_to_print);     #print group before delete
+				$log->trace( "Action: deleting:$spec" );
 
-		INNER:
-		foreach my $cnt (keys %{$inner_hash} ) {
-			#say "$cnt: @{ $inner_hash->{$cnt}    }";
-
-			#first prompt to see if there is anything to delete (printed by Dumper earlier)
-			my $continue = prompt( "Delete? ", -yn1 );
-			#say $continue;
-            if ( $continue eq 'y' ) {
-				#ask to choose species to delete
-				my $species_delete = prompt 'Choose which SPECIES you want to DELETE (single num)',
-				-menu => [ @{ $inner_hash->{$cnt} } ],
-				-number,
-				-single,
-				'>';
-				$log->trace( "DELETING: $species_delete" );
-
-				#DELETE species from nr_base_eu_cnt table (because it is species with strains present)
-				my $delete_species = qq{
-				DELETE nr FROM $NR_CNT_TBL AS nr
-				WHERE species_name = ('$species_delete');
-			    };
-			    eval { $dbh->do($delete_species, { async => 1 } ) };
-				my $rows_del_spec = $dbh->mysql_async_result;
-			    $log->debug( "Action: table $NR_CNT_TBL deleted $rows_del_spec rows with $species_delete" ) unless $@;
-			    $log->debug( "Action: deleting $NR_CNT_TBL failed: $@" ) if $@;
-
-				#prompt to redo loop (for multiple delete on same genus)
-				my $redo = prompt( "Redo?", -yns );
-				if ($redo eq 'y') {
-					redo INNER;
-				}
-				else {
-					next INNER;
-				}
-            }
-            elsif ($continue eq 'n') {
-				$log->trace( "In genus $key there is nothing to DELETE!" );
-                next INNER;
-            }
+				#DELETE species from ti_fulllist table (because it is species with strains present)
+				eval { $sth_del->execute($spec); };
+				my $rows_del_spec = $sth_del->mysql_async_result;
+			    $log->debug( "Action: table $table_list deleted $rows_del_spec rows for:{$spec}" ) unless $@;
+			    $log->debug( "Action: deleting $table_list failed for:$spec: $@" ) if $@;
+			}
+			else {
+				#$log->trace("Report: no match for:$spec in {@spec_search_group}");
+			}
 		}
 	}
-
-
+	
+	#report the changes made
+	my $genome_cnt = $dbh->selectrow_array("SELECT COUNT(*) FROM $table_list");
+	$log->info("Report: found $genome_cnt genomes in table:$table_list");
+	
 	$dbh->disconnect;
 
 	return;
@@ -4808,11 +4805,12 @@ For help write:
  #it also deletes genomes smaller than 2000 sequences
  perl ./lib/CollectGenomes.pm --mode=get_missing_genomes --tables nr_cnt=nr_ti_gi_fasta_TokuDB_cnt -tbl ti_files=ti_files -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=TokuDB
  #Table nr_ti_gi_fasta_TokuDB_cnt deleted 21139 rows!
- #it also deletes all genomes having 'goup' in name
+ #it also deletes all genomes having 'group' in name
+ #prints report at end
 
  perl ./lib/CollectGenomes.pm --mode=del_nr_genomes -tbl nr_cnt=nr_ti_gi_fasta_InnoDB_cnt -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
-
+ perl ./lib/CollectGenomes.pm --mode=del_total_genomes -tbl nr_cnt=nr_ti_gi_fasta_InnoDB_cnt -tbl ti_files=ti_files -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -en=InnoDB
 
 
  ALTERNATIVE with Deep:
