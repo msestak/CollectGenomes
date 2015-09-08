@@ -3188,11 +3188,21 @@ sub del_nr_genomes {
 			    $log->debug( "Action: deleting $NR_CNT_TBL failed for:$spec: $@" ) if $@;
 			}
 			else {
-				#say "no match for:$spec in {@spec_search_group}";
+				say "no match for:$spec in {@spec_search_group}";
 			}
 		}
 	}
 	
+	#report the changes made
+	my $q = qq{SELECT COUNT(*) FROM $NR_CNT_TBL WHERE genes_cnt >= ?};
+	my $sth = $dbh->prepare($q);
+    foreach my $i (qw/2000 3000 4000 5000 6000 7000 8000 9000 10000 15000 20000 25000 300000/) {
+		$sth->execute($i);
+		my $genome_cnt = $sth->fetchrow_array();
+		$log->info("Report: found $genome_cnt genomes larger than $i proteins in table:$NR_CNT_TBL");
+	}
+	
+	$sth->finish;
 	$dbh->disconnect;
 
 	return;
