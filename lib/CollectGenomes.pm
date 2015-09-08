@@ -3261,6 +3261,7 @@ sub del_total_genomes {
     ti INT UNSIGNED NOT NULL,
     genes_cnt INT UNSIGNED NULL,
 	species_name VARCHAR(200) NULL,
+	source VARCHAR(20) NULL,
     PRIMARY KEY(ti),
 	KEY(genes_cnt),
 	KEY(species_name)
@@ -3270,8 +3271,8 @@ sub del_total_genomes {
 
 	#insert NR genomes
     my $insert_nr = qq{
-    INSERT INTO $table_list (ti, genes_cnt, species_name)
-    SELECT ti, genes_cnt, species_name
+    INSERT INTO $table_list (ti, genes_cnt, species_name, source)
+    SELECT ti, genes_cnt, species_name, 'NCBI'
     FROM $NR_CNT_TBL
 	ORDER BY ti
     };
@@ -3282,8 +3283,8 @@ sub del_total_genomes {
 
 	#insert existing genomes
     my $insert_ti = qq{
-    INSERT INTO $table_list (ti, species_name)
-    SELECT ti, species_name
+    INSERT INTO $table_list (ti, species_name, source)
+    SELECT ti, species_name, 'Ensembl'
 	FROM $TI_FILES_TBL
 	ORDER BY ti
     };
@@ -3620,7 +3621,7 @@ sub print_nr_genomes {
     my $tis_query = qq{
     SELECT ti
     FROM $TI_FULLLIST
-	WHERE genes_cnt IS NOT NULL
+	WHERE source = 'NCBI'
     ORDER BY ti
     };
     my @tis = map { $_->[0] } @{ $dbh->selectall_arrayref($tis_query) };
@@ -4907,6 +4908,8 @@ For help write:
  perl ./lib/CollectGenomes.pm --mode=copy_existing_genomes -tbl ti_fulllist=ti_fulllist --in=./ensembl_ftp/ --out=./t/nr -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
  perl ./lib/CollectGenomes.pm --mode=copy_external_genomes -tbl ti_fulllist=ti_fulllist --in=./ensembl_ftp/ --out=./t/nr -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ 
+ perl ./lib/CollectGenomes.pm --mode=copy_external_genomes -tbl ti_fulllist=ti_fulllist --in=/home/msestak/dropbox/Databases/db_29_07_15/data/eukarya --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/external/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
 
 
