@@ -3145,6 +3145,85 @@ sub del_nr_genomes {
 	my %found_hash_cnt;
 	foreach my $species (@species_names) {
 		(my $genus_species = $species) =~ s/\A([^_]+)_([^_]+)_?(.+)*\z/$1_$2/g;
+
+		if ($genus_species eq $found_genus_species) {
+			$found_hash_cnt{$genus_species}++;   #add to hash only if found earlier (only duplicates)
+		}
+		$found_genus_species = $genus_species;   #now found has previous genus_species
+	}
+	#print Dumper(\%found_hash_cnt);
+
+	#now get found species into HoHoA to display them later
+	my (%hoarefs);
+	foreach my $species2 (@species_names) {
+		(my $genus_spec = $species2) =~ s/\A([^_]+)_([^_]+)_?(.+)*\z/$1_$2/g;
+
+		if (exists $found_hash_cnt{$genus_spec}) {
+			push @{ $hoarefs{$genus_spec} }, $species2;   #created Hash of array refs
+		}
+	}
+	#print Dumper(\%hoarefs);
+
+	#search for species to delete
+	while (my ($spec_key, $grp_aref) = each %hoarefs) {
+		my @spec_group = @{ $grp_aref };   #full group here
+		my %hash_to_print = ($spec_key => $grp_aref);
+		foreach my $spec (@{ $grp_aref }) {
+			my @spec_search_group = map { /\A$spec\z/ ? () : $_} @spec_group;            #remove only species that is exactly the same
+			@spec_search_group = map { /\A$spec(\d+)\z/ ? () : $_} @spec_search_group;   #remove species that is different only in ending number too
+			@spec_search_group = map { /\A$spec([^_]+)\z/ ? () : $_} @spec_search_group; #remove species that is different only in ending letters after _
+			if ( grep { /$spec/ } @spec_search_group) {                       #search for that species among the other species (anywhere in name)
+				$log->trace("Report: found match for:{$spec} in:{@spec_search_group}");
+				print Dumper(\%hash_to_print);     #print group before delete
+				$log->trace( "Action: deleting:$spec" );
+
+				#DELETE species from nr_base_eu_cnt table (because it is species with strains present)
+				my $delete_spec = qq{
+				DELETE nr FROM $NR_CNT_TBL AS nr
+				WHERE species_name = ('$spec');
+			    };
+			    eval { $dbh->do($delete_spec, { async => 1 } ) };
+				my $rows_del_spec = $dbh->mysql_async_result;
+			    $log->debug( "Action: table $NR_CNT_TBL deleted $rows_del_spec rows for:{$spec}" ) unless $@;
+			    $log->debug( "Action: deleting $NR_CNT_TBL failed for:$spec: $@" ) if $@;
+			}
+			else {
+				#say "no match for:$spec in {@spec_search_group}";
+			}
+		}
+	}
+	
+	$dbh->disconnect;
+
+	return;
+}
+
+
+sub del_nr_genomes2 {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak( 'del_nr_genomes() needs a $param_href' ) unless @_ == 1;
+    my ( $param_href ) = @_;
+
+	my $DATABASE = $param_href->{DATABASE}    or $log->logcroak( 'no $DATABASE specified on command line!' );
+    my %TABLES   = %{ $param_href->{TABLES} } or $log->logcroak('no $TABLES specified on command line!');
+    my $NR_CNT_TBL   = $TABLES{nr_cnt};
+			
+	#get new handle
+    my $dbh = dbi_connect($param_href);
+
+	#get all species names as array
+    my $species_query = qq{
+    SELECT species_name 
+    FROM $NR_CNT_TBL
+    ORDER BY species_name
+    };
+    my @species_names = map { $_->[0] } @{ $dbh->selectall_arrayref($species_query) };
+
+	#get count of genus if there is more than 1 (into hash)
+	my $found_genus_species = '';
+	my %found_hash_cnt;
+	foreach my $species (@species_names) {
+		(my $genus_species = $species) =~ s/\A([^_]+)_([^_]+)_?(.+)*\z/$1_$2/g;
 		#say "SPECIES:$species\tGENUS:$genus_species";
 
 		if ($genus_species eq $found_genus_species) {
@@ -3152,6 +3231,7 @@ sub del_nr_genomes {
 		}
 		$found_genus_species = $genus_species;   #now found has previous genus_species
 	}
+	print Dumper(\%found_hash_cnt);
 
 	#now get found species into HoHoA to display them later
 	my (%hohoa);
@@ -3162,6 +3242,9 @@ sub del_nr_genomes {
 			push @{ $hohoa{$genus_spec}{ $found_hash_cnt{$genus_spec} } }, $species2;   #created HoHoArrays
 		}
 	}
+	print Dumper(\%hohoa);
+
+	#search for species to delete
 	
 	#print number of duplicates found
 	my $dup_found = keys %hohoa;
@@ -3217,8 +3300,6 @@ sub del_nr_genomes {
 
 	return;
 }
-
-
 =for Example:
  $VAR1 = {
            '2' => [
@@ -4676,7 +4757,7 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
 
  perl ./lib/CollectGenomes.pm --mode=del_nr_genomes -tbl nr_cnt=nr_ti_gi_fasta_InnoDB_cnt -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
- perl ./lib/CollectGenomes.pm --mode=del_total_genomes -tbl nr_cnt=nr_ti_gi_fasta_InnoDB_cnt -tbl ti_files=ti_files -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625n=InnoDB
+ perl ./lib/CollectGenomes.pm --mode=del_total_genomes -tbl nr_cnt=nr_ti_gi_fasta_InnoDB_cnt -tbl ti_files=ti_files -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -en=InnoDB
 
  perl ./lib/CollectGenomes.pm --mode=print_nr_genomes -tbl ti_fulllist=ti_fulllist -tbl nr_ti_fasta=nr_ti_gi_fasta_InnoDB -o ./t/nr -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
