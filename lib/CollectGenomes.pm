@@ -65,6 +65,7 @@ our @EXPORT_OK = qw{
 	del_total_genomes
 	print_nr_genomes
 	copy_existing_genomes
+	copy_external_genomes
 	ensembl_ftp
 	ensembl_ftp_vertebrates
 	prepare_cdhit_per_phylostrata
@@ -151,6 +152,7 @@ sub main {
         del_total_genomes             => \&del_total_genomes,
         print_nr_genomes              => \&print_nr_genomes,
         copy_existing_genomes         => \&copy_existing_genomes,
+		copy_external_genomes         => \&copy_external_genomes,
         ensembl_vertebrates           => \&ensembl_ftp_vertebrates,
         ensembl_ftp                   => \&ensembl_ftp,
         prepare_cdhit_per_phylostrata => \&prepare_cdhit_per_phylostrata,
@@ -3960,7 +3962,7 @@ sub make_db_dirs {
 
     #get new handle
 
-    my @dirs = qw(
+    my @dirs = qw{
       data/ensembl_ftp
       data/ensembl_vertebrates
       data/ensembl_all
@@ -3970,9 +3972,11 @@ sub make_db_dirs {
       data/cdhit
       data/jgi
       data/xml
+      data/external
+      data/all
       doc
       src
-    );
+	  };
 
     foreach my $dir (@dirs) {
         my $path_dir = path( $OUT, $dir )->canonpath;
@@ -4573,6 +4577,70 @@ sub curl_genomes {
     return;
 }
 
+### INTERFACE SUB ###
+# Usage      : copy_external_genomes( $param_href );
+# Purpose    : prints genomes outside Ensembl or  present genomes to dropdox/D.../db../data/eukarya
+# Returns    : nothing
+# Parameters : ( $param_href )
+# Throws     : croaks for parameters
+# Comments   : it takes genomes from old directory (base) and prints them to $OUT
+# See Also   : 
+sub copy_external_genomes {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak( 'copy_external_genomes() needs a $param_href' ) unless @_ == 1;
+    my ( $param_href ) = @_;
+
+	my $DATABASE = $param_href->{DATABASE} or $log->logcroak( 'no $DATABASE specified on command line!' );
+	my $OUT      = $param_href->{OUT}      or $log->logcroak( 'no $OUT specified on command line!' );
+	my $IN       = $param_href->{IN}   or $log->logcroak( 'no $IN specified on command line!' );
+    my %TABLES   = %{ $param_href->{TABLES} } or $log->logcroak('no $TABLES specified on command line!');
+    my $TI_FULLLIST = $TABLES{ti_fulllist};
+			
+	#get new handle
+    my $dbh = dbi_connect($param_href);
+
+	#get all tax_ids that belong to ENSEMBL genomes
+    my $tis_query = qq{
+    SELECT ti
+    FROM $TI_FULLLIST
+	WHERE genes_cnt IS NULL
+    ORDER BY ti
+    };
+    my @tis = map { $_->[0] } @{ $dbh->selectall_arrayref($tis_query) };
+
+	#SECOND PART: get all existing genomes from $IN
+	my @ti_files = File::Find::Rule->file()
+								   ->name(qr/\A\d+\z/)
+								   ->in($IN);
+	@ti_files = sort {$a cmp $b} @ti_files;
+
+	#starting iteration over @ti_files to copy genomes from $IN to $OUT
+	foreach my $ti_file (@ti_files) {
+		$log->trace( "Action: working on $ti_file" );
+		my $ti_from_file = path($ti_file)->basename;
+
+		my $end_ti_file = path($OUT, $ti_from_file);
+		if (grep {$_ == $ti_from_file} @tis ) {
+			#delete ti_files (genomes) if they exist in $OUT dir and TABLE
+			if (-f $end_ti_file) {
+				unlink $end_ti_file and $log->warn( "Action: file $end_ti_file unlinked" );
+			}
+		}
+		else {
+			#unlink if already there
+			if (-f $end_ti_file) {
+				unlink $end_ti_file and $log->warn( "Action: file $end_ti_file unlinked" );
+			}
+			#copy them from $IN to $OUT
+			$log->info( "Action: file $ti_file not found in modified list:$TI_FULLLIST" );
+            path($ti_file)->copy($OUT) and $log->debug( "Action: File $ti_file copied to $OUT" );
+		}
+	}
+
+	$dbh->disconnect;
+
+	return;
+}
 
 
 
@@ -4832,12 +4900,13 @@ For help write:
  #Action: deleted 2 hybrid species from ti_fulllist
  #Report: found 25063 genomes in table:ti_fulllist
  
- perl ./lib/CollectGenomes.pm --mode=print_nr_genomes -tbl ti_fulllist=ti_fulllist -tbl nr_ti_fasta=nr_ti_gi_fasta_InnoDB -o ./t/nr -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ #extract nr genomes after filtering
+ perl ./lib/CollectGenomes.pm --mode=print_nr_genomes -tbl ti_fulllist=ti_fulllist -tbl nr_ti_fasta=nr_ti_gi_fasta_TokuDB -o /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_genomes/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ #printed 4111 genomes
 
+ perl ./lib/CollectGenomes.pm --mode=copy_existing_genomes -tbl ti_fulllist=ti_fulllist --in=./ensembl_ftp/ --out=./t/nr -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
-
-
-
+ perl ./lib/CollectGenomes.pm --mode=copy_external_genomes -tbl ti_fulllist=ti_fulllist --in=./ensembl_ftp/ --out=./t/nr -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
 
 
@@ -4931,6 +5000,10 @@ For help write:
  #Action: import inserted 21163 rows!
  #Action: deleted 2 hybrid species from ti_fulllist
  #Report: found 25063 genomes in table:ti_fulllist
+
+ #extract nr genomes after filtering
+ perl ./lib/CollectGenomes.pm --mode=print_nr_genomes -tbl ti_fulllist=ti_fulllist -tbl nr_ti_fasta=nr_ti_gi_fasta_Deep -o /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_genomes/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5626 -s /tmp/mysql_sandbox5626.sock
+
 
 
 
