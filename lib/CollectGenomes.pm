@@ -4691,7 +4691,8 @@ sub copy_external_genomes {
     my $up_sp = qq{
 	UPDATE $TI_FULLLIST AS ti
 	SET ti.species_name = (SELECT DISTINCT na.species_name
-	FROM $NAMES AS na WHERE ti.ti = na.ti);
+	FROM $NAMES AS na WHERE ti.ti = na.ti)
+	WHERE ti.species_name IS NULL;
     };
     eval { $dbh->do($up_sp, { async => 1 } ) };
 	my $rows_up = $dbh->mysql_async_result;
@@ -4710,12 +4711,11 @@ sub copy_external_genomes {
 # Usage      : my $fasta_cnt = collect_fasta_print({FILE => $ti_file, TAXID => $ti_from_file, %{$param_href} });
 # Purpose    : accepts fasta location and gives fasta count
 #            : transforms fasta to simpler form (only gene name in header) and checks fasta_seq for errors
-# Returns    : nothing
+# Returns    : $line_count (count of fasta records)
 # Parameters : ( $param_href )
 # Throws     : croaks for parameters
 # Comments   : part of copy_external_genomes() mode
 # See Also   : copy_external_genomes()
-
 sub collect_fasta_print {
 	my $log = Log::Log4perl::get_logger("main");
 	$log->logcroak( 'copy_external_genomes() needs a $param_href' ) unless @_ == 1;
@@ -4767,6 +4767,8 @@ sub collect_fasta_print {
 		$log->debug( qq|Action: saved fasta file to $fasta_out with $line_count lines| );
 		#print {$stat_fh} $line_count, "\n";
 	}
+
+	return $line_count;
 }
 
 
