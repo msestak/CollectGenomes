@@ -63,6 +63,7 @@ our @EXPORT_OK = qw{
     get_missing_genomes
 	del_nr_genomes
 	del_total_genomes
+	del_species_with_strain
 	print_nr_genomes
 	copy_existing_genomes
 	copy_external_genomes
@@ -150,6 +151,7 @@ sub main {
         get_missing_genomes           => \&get_missing_genomes,
         del_nr_genomes                => \&del_nr_genomes,
         del_total_genomes             => \&del_total_genomes,
+		del_species_with_strain       => \&del_species_with_strain,
         print_nr_genomes              => \&print_nr_genomes,
         copy_existing_genomes         => \&copy_existing_genomes,
 		copy_external_genomes         => \&copy_external_genomes,
@@ -3146,7 +3148,7 @@ sub del_nr_genomes {
 	my $found_genus_species = '';
 	my %found_hash_cnt;
 	foreach my $species (@species_names) {
-		(my $genus_species = $species) =~ s/\A([^_]+)_([^_]+)_?(.+)*\z/$1_$2/g;
+		(my $genus_species = $species) =~ s/\A([^_]+)_(.+)_(?:.+)\z/$1_$2/g;
 
 		if ($genus_species eq $found_genus_species) {
 			$found_hash_cnt{$genus_species}++;   #add to hash only if found earlier (only duplicates)
@@ -3158,7 +3160,7 @@ sub del_nr_genomes {
 	#now get found species into hash of arefs to delete them later
 	my (%hoarefs);
 	foreach my $species2 (@species_names) {
-		(my $genus_spec = $species2) =~ s/\A([^_]+)_([^_]+)_?(.+)*\z/$1_$2/g;
+		(my $genus_spec = $species2) =~ s/\A([^_]+)_(.+)_(?:.+)\z/$1_$2/g;
 
 		if (exists $found_hash_cnt{$genus_spec}) {
 			push @{ $hoarefs{$genus_spec} }, $species2;   #created Hash of array refs
@@ -3315,7 +3317,7 @@ sub del_total_genomes {
 	my $found_genus_species = '';
 	my %found_hash_cnt;
 	foreach my $species (@species_names) {
-		(my $genus_species = $species) =~ s/\A([^_]+)_([^_]+)_?(.+)*\z/$1_$2/g;
+		(my $genus_species = $species) =~ s/\A([^_]+)_(.+)_(?:.+)\z/$1_$2/g;
 
 		if ($genus_species eq $found_genus_species) {
 			$found_hash_cnt{$genus_species}++;   #add to hash only if found earlier (only duplicates)
@@ -3327,7 +3329,7 @@ sub del_total_genomes {
 	#now get found species into hash of arefs to delete them later
 	my (%hoarefs);
 	foreach my $species2 (@species_names) {
-		(my $genus_spec = $species2) =~ s/\A([^_]+)_([^_]+)_?(.+)*\z/$1_$2/g;
+		(my $genus_spec = $species2) =~ s/\A([^_]+)_(.+)_(?:.+)\z/$1_$2/g;
 
 		if (exists $found_hash_cnt{$genus_spec}) {
 			push @{ $hoarefs{$genus_spec} }, $species2;   #created Hash of array refs
@@ -3374,6 +3376,8 @@ sub del_total_genomes {
 
 	return;
 }
+
+
 
 ### INTERFACE SUB ###
 # Usage      : import_raw_names( $param_href );
@@ -4772,6 +4776,112 @@ sub collect_fasta_print {
 }
 
 
+### INTERFACE SUB ###
+# Usage      : del_species_with_strain( $param_href );
+# Purpose    : deletes TOATL species genomes that have subspecies or strain genomes (third step) from final table
+# Returns    : nothing
+# Parameters : ( $param_href )
+# Throws     : croaks for parameters
+# Comments   : it works on ti_fulllist table (doesn't create it)
+#            : deletes hybrid genomes
+#            : it deletes genomes that have species and strain genomes in full dataset
+#            : (both nr and existing genomes)
+# See Also   : del_total_genomes() - second step
+#            : run del_total_genomes and copy_external_genomes to recreate ti_fulllist
+sub del_species_with_strain {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak( 'del_species_with_strain() needs a $param_href' ) unless @_ == 1;
+    my ( $param_href ) = @_;
+
+    my $DATABASE = $param_href->{DATABASE}    or $log->logcroak('no $DATABASE specified on command line!');
+    my %TABLES   = %{ $param_href->{TABLES} } or $log->logcroak('no $TABLES specified on command line!');
+    my $TI_FULLLIST = $TABLES{ti_fulllist};
+			
+	#get new handle
+    my $dbh = dbi_connect($param_href);
+
+	#FIRST PART: delete species that are hybrids
+	my $del_hybrid = sprintf( q{
+	DELETE ti FROM %s AS ti
+	WHERE species_name LIKE %s }, $dbh->quote_identifier($TI_FULLLIST), $dbh->quote('%\_x\_%') );
+    #say $del_hybrid;
+	eval { $dbh->do($del_hybrid, { async => 1 } ) };
+	my $rows_hy = $dbh->mysql_async_result;
+	$log->debug( "Action: deleted $rows_hy hybrid species from $TI_FULLLIST") unless $@;
+	$log->error( "Action: table $TI_FULLLIST delete for hybrids failed: $@" ) if $@;
+
+	#SECOND PART: remove superfluous genomes
+    my $species_query = qq{
+    SELECT species_name 
+    FROM $TI_FULLLIST
+    ORDER BY species_name
+    };
+    my @species_names = map { $_->[0] } @{ $dbh->selectall_arrayref($species_query) };
+
+	#get count of genus if there is more than 1 (into hash)
+	my $found_genus_species = '';
+	my %found_hash_cnt;
+	foreach my $species (@species_names) {
+		(my $genus_species = $species) =~ s/\A([^_]+)_(.+)_(?:.+)\z/$1_$2/g;
+
+		if ($genus_species eq $found_genus_species) {
+			$found_hash_cnt{$genus_species}++;   #add to hash only if found earlier (only duplicates)
+		}
+		$found_genus_species = $genus_species;   #now found has previous genus_species
+	}
+	#print Dumper(\%found_hash_cnt);
+
+	#now get found species into hash of arefs to delete them later
+	my (%hoarefs);
+	foreach my $species2 (@species_names) {
+		(my $genus_spec = $species2) =~ s/\A([^_]+)_(.+)_(?:.+)\z/$1_$2/g;
+
+		if (exists $found_hash_cnt{$genus_spec}) {
+			push @{ $hoarefs{$genus_spec} }, $species2;   #created Hash of array refs
+		}
+	}
+	#print Dumper(\%hoarefs);
+
+	#search for species to delete
+	my $delete_spec = qq{
+		DELETE ti FROM $TI_FULLLIST AS ti
+		WHERE species_name = ?;
+	};
+	my $sth_del = $dbh->prepare($delete_spec, { async => 1 } );
+
+	while (my ($spec_key, $grp_aref) = each %hoarefs) {
+		my @spec_group = @{ $grp_aref };   #full group here
+		my %hash_to_print = ($spec_key => $grp_aref);
+		foreach my $spec (@{ $grp_aref }) {
+			my @spec_search_group = map { /\A$spec\z/ ? () : $_} @spec_group;            #remove only species that is exactly the same
+			@spec_search_group = map { /\A$spec(\d+)\z/ ? () : $_} @spec_search_group;   #remove species that is different only in ending number too
+			@spec_search_group = map { /\A$spec([^_]+)\z/ ? () : $_} @spec_search_group; #remove species that is different only in ending letters after _
+			if ( grep { /$spec/ } @spec_search_group) {                       #search for that species among the other species (anywhere in name)
+				#$log->trace("Report: found match for:{$spec} in:{@spec_search_group}");
+				print Dumper(\%hash_to_print);     #print group before delete
+				$log->trace( "Action: deleting:$spec" );
+
+				#DELETE species from ti_fulllist table (because it is species with strains present)
+				eval { $sth_del->execute($spec); };
+				my $rows_del_spec = $sth_del->mysql_async_result;
+			    $log->debug( "Action: table $TI_FULLLIST deleted $rows_del_spec rows for:{$spec}" ) unless $@;
+			    $log->debug( "Action: deleting $TI_FULLLIST failed for:$spec: $@" ) if $@;
+			}
+			else {
+				#$log->trace("Report: no match for:$spec in {@spec_search_group}");
+			}
+		}
+	}
+	
+	#report the changes made
+	my $genome_cnt = $dbh->selectrow_array("SELECT COUNT(*) FROM $TI_FULLLIST");
+	$log->info("Report: found $genome_cnt genomes in table:$TI_FULLLIST");
+	
+	$dbh->disconnect;
+
+	return;
+}
+
 
 
 
@@ -5030,12 +5140,9 @@ For help write:
  perl ./lib/CollectGenomes.pm --mode=print_nr_genomes -tbl ti_fulllist=ti_fulllist -tbl nr_ti_fasta=nr_ti_gi_fasta_TokuDB -o /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_genomes/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
  #printed 4111 genomes
 
- perl ./lib/CollectGenomes.pm --mode=copy_existing_genomes -tbl ti_fulllist=ti_fulllist --in=./ensembl_ftp/ --out=./t/nr -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
-
- perl ./lib/CollectGenomes.pm --mode=copy_external_genomes -tbl ti_fulllist=ti_fulllist --in=./ensembl_ftp/ --out=./t/nr -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
- 
- perl ./lib/CollectGenomes.pm --mode=copy_external_genomes -tbl ti_fulllist=ti_fulllist --in=/home/msestak/dropbox/Databases/db_29_07_15/data/eukarya --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/external/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
-
+ #copy genomes from previuos database not in this one
+ perl ./lib/CollectGenomes.pm --mode=copy_external_genomes -tbl ti_fulllist=ti_fulllist -tbl names=names_raw_2015_9_3_new --in=/home/msestak/dropbox/Databases/db_29_07_15/data/eukarya --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/external/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ #255 genomes inserted
 
 
 
@@ -5135,6 +5242,7 @@ For help write:
 
 
 
+ perl ./lib/CollectGenomes.pm --mode=copy_external_genomes -tbl ti_fulllist=ti_fulllist -tbl names=names_raw_2015_9_3_new --in=/home/msestak/dropbox/Databases/db_29_07_15/data/eukarya --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/external/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
 
 =head1 LICENSE
