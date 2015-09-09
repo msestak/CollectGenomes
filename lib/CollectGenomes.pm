@@ -1404,7 +1404,7 @@ sub extract_and_load_nr {
 				my ($header_long, $fasta) = $_ =~ m{\A([^\n].+?)\n(.+)\z}sx;
 				#remove illegal chars from fasta and upercase it
 			    $fasta =~ s/\R//g;  #delete multiple newlines (all vertical and horizontal space)
-				$fasta =~ tr/[+*-._]//;
+			    $fasta =~ tr{A-Za-z}{}dc;  #delete all special characters
 				$fasta =~ s/\d+//;
 				$fasta = uc $fasta;
 				$header_long =~ s/\|\|/\|/g;
@@ -4755,7 +4755,9 @@ sub collect_fasta_print {
 			$fasta_seq =~ s/\d+//;         #delete all numbers
 			$fasta_seq =~ s/\R//g;         #delete all vertical and horizontal space
 			$fasta_seq = uc $fasta_seq;    #to uppercase
-			$fasta_seq =~ tr/[+*-._?]//;   #delete all special characters
+			$fasta_seq =~ tr{A-Za-z}{}dc;  #delete all special characters
+			#c Complement the SEARCHLIST.
+			#d Delete found but unreplaced characters.
 
 			print $genome_ti_fh ('>', $header, "\n", $fasta_seq, "\n");
 		}
