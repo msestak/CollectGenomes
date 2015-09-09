@@ -4596,6 +4596,7 @@ sub copy_external_genomes {
 	my $IN       = $param_href->{IN}   or $log->logcroak( 'no $IN specified on command line!' );
     my %TABLES   = %{ $param_href->{TABLES} } or $log->logcroak('no $TABLES specified on command line!');
     my $TI_FULLLIST = $TABLES{ti_fulllist};
+    my $NAMES       = $TABLES{names};
 			
 	#get new handle
     my $dbh = dbi_connect($param_href);
@@ -4685,6 +4686,17 @@ sub copy_external_genomes {
 			}
 		}
 	}
+	
+	#UPDATE with species_names
+    my $up_sp = qq{
+	UPDATE $TI_FULLLIST AS ti
+	SET ti.species_name = (SELECT DISTINCT na.species_name
+	FROM $NAMES AS na WHERE ti.ti = na.ti);
+    };
+    eval { $dbh->do($up_sp, { async => 1 } ) };
+	my $rows_up = $dbh->mysql_async_result;
+    $log->debug( "Action: update to $TI_FULLLIST updated $rows_up rows!" ) unless $@;
+    $log->error( "Action: updating $TI_FULLLIST failed: $@" ) if $@;
 	
 	$sth->finish;
 	$sth_sel->finish;
