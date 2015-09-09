@@ -4600,28 +4600,67 @@ sub copy_external_genomes {
 	#get new handle
     my $dbh = dbi_connect($param_href);
 
-	#get all tax_ids that belong to ENSEMBL genomes
-    my $tis_query = qq{
-    SELECT ti
-    FROM $TI_FULLLIST
-	WHERE genes_cnt IS NULL
-    ORDER BY ti
-    };
-    my @tis = map { $_->[0] } @{ $dbh->selectall_arrayref($tis_query) };
-
-	#SECOND PART: get all existing genomes from $IN
+	#get all existing genomes from $IN
 	my @ti_files = File::Find::Rule->file()
 								   ->name(qr/\A\d+\z/)
 								   ->in($IN);
 	@ti_files = sort {$a cmp $b} @ti_files;
+	my @external_tis = map {path($_)->basename} @ti_files;
+	#print Dumper(\@external_tis);
+
+	#FIRST compare to ensembl_all and nr_genomes directories
+	my $ens_path = path(path($OUT)->parent, 'ensembl_all')->canonpath;
+	my $nr_path  = path(path($OUT)->parent, 'nr_genomes')->canonpath;
+	my @ti_files_ens = File::Find::Rule->file()
+								   ->name(qr/\A\d+\z/)
+								   ->in($ens_path);
+	#print Dumper(\@ti_files_ens);
+	my %ens_tis = map {path($_)->basename => undef} @ti_files_ens;
+	#print Dumper(\%ens_tis);
+	my @ti_files_nr  = File::Find::Rule->file()
+								   ->name(qr/\A\d+\z/)
+								   ->in($nr_path);
+	my %nr_tis = map {path($_)->basename => undef} @ti_files_ens;
+	
+	my @not_found;
+	foreach my $ti (@external_tis) {
+		my $ti_orig_loc = path($IN, $ti)->canonpath;
+		if ( (! exists $ens_tis{$ti}) and (! exists $nr_tis{$ti}) ) {
+			push @not_found, $ti_orig_loc;
+		}
+		else {
+			$log->warn("Action: $ti_orig_loc excluded becuse found in ensembl_all or nr_genomes");
+		}
+	}
+	#print Dumper(\@not_found);
+
+	#SECOND check for existence in TI_FULLLIST and copy to external
+	#insert query to insert to ti_fulllist
+	my $q_in = qq{
+	INSERT INTO ti_fulllist (ti, genes_cnt, source)
+	VALUES (?, ?, 'external')
+	};
+	my $sth = $dbh->prepare($q_in);
+
+	#select query to get ti for comparison to fasta_file
+	my $q_sel = qq{
+	SELECT ti FROM ti_fulllist
+	WHERE ti = ?
+	};
+	my $sth_sel = $dbh->prepare($q_sel);
 
 	#starting iteration over @ti_files to copy genomes from $IN to $OUT
-	foreach my $ti_file (@ti_files) {
+	foreach my $ti_file (@not_found) {
 		$log->trace( "Action: working on $ti_file" );
 		my $ti_from_file = path($ti_file)->basename;
-
 		my $end_ti_file = path($OUT, $ti_from_file);
-		if (grep {$_ == $ti_from_file} @tis ) {
+		
+		#compare ti_from_file to ti in db to see if it exists
+		$sth_sel->execute($ti_from_file);
+		my ($ti_from_db) = $sth_sel->fetchrow_array();
+
+		if ($ti_from_db) {
+			$log->error("Ti file:$ti_file found in TI_FULLLIST");
 			#delete ti_files (genomes) if they exist in $OUT dir and TABLE
 			if (-f $end_ti_file) {
 				unlink $end_ti_file and $log->warn( "Action: file $end_ti_file unlinked" );
@@ -4632,19 +4671,89 @@ sub copy_external_genomes {
 			if (-f $end_ti_file) {
 				unlink $end_ti_file and $log->warn( "Action: file $end_ti_file unlinked" );
 			}
-			#copy them from $IN to $OUT
+			#copy fasta from $IN to $OUT and transform as needed
 			$log->info( "Action: file $ti_file not found in modified list:$TI_FULLLIST" );
-            path($ti_file)->copy($OUT) and $log->debug( "Action: File $ti_file copied to $OUT" );
+			my $fasta_cnt = collect_fasta_print({FILE => $ti_file, TAXID => $ti_from_file, %{$param_href} });
+
+			#insert into ti_fulllist
+			eval {$sth->execute($ti_from_file, $fasta_cnt); };
+			my $rows = $sth->rows;
+			$log->debug( "Action: table $TI_FULLLIST inserted $rows rows for ti:$ti_from_file" ) unless $@;
+			$log->error( "Action: inserting $TI_FULLLIST failed for ti:$ti_from_file:$@" ) if $@;
+			if ($@) {
+				unlink $end_ti_file and $log->warn( "Action: file $end_ti_file unlinked because it already exists in $TI_FULLLIST table" );
+			}
 		}
 	}
-
+	
+	$sth->finish;
+	$sth_sel->finish;
 	$dbh->disconnect;
 
 	return;
 }
 
 
+### INTERNAL UTILITY ###
+# Usage      : my $fasta_cnt = collect_fasta_print({FILE => $ti_file, TAXID => $ti_from_file, %{$param_href} });
+# Purpose    : accepts fasta location and gives fasta count
+#            : transforms fasta to simpler form (only gene name in header) and checks fasta_seq for errors
+# Returns    : nothing
+# Parameters : ( $param_href )
+# Throws     : croaks for parameters
+# Comments   : part of copy_external_genomes() mode
+# See Also   : copy_external_genomes()
 
+sub collect_fasta_print {
+	my $log = Log::Log4perl::get_logger("main");
+	$log->logcroak( 'copy_external_genomes() needs a $param_href' ) unless @_ == 1;
+	my ( $param_href ) = @_;
+
+	my $OUT      = $param_href->{OUT}   or $log->logcroak( 'no $OUT specified on command line!' );
+	my $fasta_in = $param_href->{FILE}  or $log->logcroak( 'no $fasta_in sent to sub!' );
+	my $ti       = $param_href->{TAXID} or $log->logcroak( 'no $ti sent to sub!' );
+
+	open my $in_fh, "<", $fasta_in  or $log->logdie( "Error: can't open $fasta_in: $!" );
+	my $fasta_out = path($OUT, $ti);
+	open my $genome_ti_fh, ">", $fasta_out or $log->logdie( "Error: can't write to $fasta_out: $!" );
+	
+	#return $/ value to newline for $header_first_line
+	#local $/ = "\n";
+
+	#my $header_first_line = <$in_fh>;
+	#print {$stat_fh} $header_first_line, "\t";
+	
+	#return to start of file
+	#seek $extracted_fh, 0, 0;
+
+	#look in larger chunks between records
+	local $/ = ">";
+	my $line_count = 0;
+	while (<$in_fh>) {
+		chomp;
+
+		if (m{\A([^(\h\v)]+)      #gene name or gene id till first horizontal space or vertical space (already pruned fasta)
+				(?:\h+)*          #optional horizontal space
+				(?:[^\v]+)*\v     #optional description ending in vertical space + vertical space
+				(.+)}xs) {        #fasta seq (everything after first vertical space (multiline mode=s)
+
+			$line_count++;
+			my $header = $1;
+			my $fasta_seq = $2;
+			$fasta_seq =~ s/\d+//;         #delete all numbers
+			$fasta_seq =~ s/\R//g;         #delete all vertical and horizontal space
+			$fasta_seq = uc $fasta_seq;    #to uppercase
+			$fasta_seq =~ tr/[+*-._?]//;   #delete all special characters
+
+			print $genome_ti_fh ('>', $header, "\n", $fasta_seq, "\n");
+		}
+	}   #end while
+
+	if ($line_count) {
+		$log->debug( qq|Action: saved fasta file to $fasta_out with $line_count lines| );
+		#print {$stat_fh} $line_count, "\n";
+	}
+}
 
 
 
