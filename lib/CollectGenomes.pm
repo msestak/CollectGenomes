@@ -65,7 +65,7 @@ our @EXPORT_OK = qw{
 	del_total_genomes
 	del_species_with_strain
 	print_nr_genomes
-	copy_existing_genomes
+	merge_existing_genomes
 	copy_external_genomes
 	ensembl_ftp
 	ensembl_ftp_vertebrates
@@ -153,7 +153,7 @@ sub main {
         del_total_genomes             => \&del_total_genomes,
 		del_species_with_strain       => \&del_species_with_strain,
         print_nr_genomes              => \&print_nr_genomes,
-        copy_existing_genomes         => \&copy_existing_genomes,
+        merge_existing_genomes        => \&merge_existing_genomes,
 		copy_external_genomes         => \&copy_external_genomes,
         ensembl_vertebrates           => \&ensembl_ftp_vertebrates,
         ensembl_ftp                   => \&ensembl_ftp,
@@ -2992,7 +2992,7 @@ sub get_missing_genomes {
 
 	my $q = qq{SELECT COUNT(*) FROM $NR_CNT_TBL WHERE genes_cnt >= ?};
 	my $sth = $dbh->prepare($q);
-    foreach my $i (qw/2000 3000 4000 5000 6000 7000 8000 9000 10000 15000 20000 25000 300000/) {
+    foreach my $i (qw/2000 3000 4000 5000 6000 7000 8000 9000 10000 15000 20000 25000 30000/) {
 		$sth->execute($i);
 		my $genome_cnt = $sth->fetchrow_array();
 		$log->info("Report: found $genome_cnt genomes larger than $i proteins in table:$NR_CNT_TBL");
@@ -3200,7 +3200,7 @@ sub del_nr_genomes {
 	#report the changes made
 	my $q = qq{SELECT COUNT(*) FROM $NR_CNT_TBL WHERE genes_cnt >= ?};
 	my $sth = $dbh->prepare($q);
-    foreach my $i (qw/2000 3000 4000 5000 6000 7000 8000 9000 10000 15000 20000 25000 300000/) {
+    foreach my $i (qw/2000 3000 4000 5000 6000 7000 8000 9000 10000 15000 20000 25000 30000/) {
 		$sth->execute($i);
 		my $genome_cnt = $sth->fetchrow_array();
 		$log->info("Report: found $genome_cnt genomes larger than $i proteins in table:$NR_CNT_TBL");
@@ -3652,68 +3652,6 @@ sub print_nr_genomes {
 		$log->error( "Action: file $genome_out failed to print: $@" ) if $@;
 		$log->debug( "Action: file $genome_out printed" ) unless $@;
 	
-	}
-
-	$dbh->disconnect;
-
-	return;
-}
-
-### INTERFACE SUB ###
-# Usage      : copy_existing_genomes( $param_href );
-# Purpose    : prints present genomes to dropdox/D.../db../data/eukarya
-# Returns    : nothing
-# Parameters : ( $param_href )
-# Throws     : croaks for parameters
-# Comments   : it takes genomes from old directory (base) and prints them to $OUT
-# See Also   : 
-sub copy_existing_genomes {
-    my $log = Log::Log4perl::get_logger("main");
-    $log->logcroak( 'copy_existing_genomes() needs a $param_href' ) unless @_ == 1;
-    my ( $param_href ) = @_;
-
-	my $DATABASE = $param_href->{DATABASE} or $log->logcroak( 'no $DATABASE specified on command line!' );
-	my $OUT      = $param_href->{OUT}      or $log->logcroak( 'no $OUT specified on command line!' );
-	my $IN       = $param_href->{IN}   or $log->logcroak( 'no $IN specified on command line!' );
-    my %TABLES   = %{ $param_href->{TABLES} } or $log->logcroak('no $TABLES specified on command line!');
-    my $TI_FULLLIST = $TABLES{ti_fulllist};
-			
-	#get new handle
-    my $dbh = dbi_connect($param_href);
-
-	#get all tax_ids that belong to ENSEMBL genomes
-    my $tis_query = qq{
-    SELECT ti
-    FROM $TI_FULLLIST
-	WHERE genes_cnt IS NULL
-    ORDER BY ti
-    };
-    my @tis = map { $_->[0] } @{ $dbh->selectall_arrayref($tis_query) };
-
-	#SECOND PART: get all existing genomes from $IN
-	my @ti_files = File::Find::Rule->file()
-								   ->name(qr/\A\d+\z/)
-								   ->in($IN);
-	@ti_files = sort {$a cmp $b} @ti_files;
-
-	#starting iteration over @ti_files to copy genomes from $IN to $OUT
-	foreach my $ti_file (@ti_files) {
-		$log->trace( "Action: working on $ti_file" );
-		my $ti_from_file = path($ti_file)->basename;
-
-		if (grep {$_ == $ti_from_file} @tis ) {
-			#delete ti_files (genomes) if they exist in $OUT dir
-			my $end_ti_file = path($OUT, $ti_from_file);
-			if (-f $end_ti_file) {
-			unlink $end_ti_file and $log->warn( "Action: file $end_ti_file unlinked" );
-			}
-			#copy them from $IN to $OUT
-            path($ti_file)->copy($OUT)
-				and $log->debug( "Action: File $ti_file copied to $OUT" );
-		}
-		else {
-			$log->info( "Action: file $ti_file not found in modified list:$TI_FULLLIST" );
-		}
 	}
 
 	$dbh->disconnect;
@@ -4882,6 +4820,96 @@ sub del_species_with_strain {
 	return;
 }
 
+### INTERFACE SUB ###
+# Usage      : merge_existing_genomes( $param_href );
+# Purpose    : prints present genomes to dropdox/D.../db../data/eukarya
+# Returns    : nothing
+# Parameters : ( $param_href )
+# Throws     : croaks for parameters
+# Comments   : it takes genomes from old directory (base) and prints them to $OUT
+# See Also   : 
+sub merge_existing_genomes {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak( 'merge_existing_genomes() needs a $param_href' ) unless @_ == 1;
+    my ( $param_href ) = @_;
+
+	my $DATABASE = $param_href->{DATABASE} or $log->logcroak( 'no $DATABASE specified on command line!' );
+	my $OUT      = $param_href->{OUT}      or $log->logcroak( 'no $OUT specified on command line!' );
+    my %TABLES   = %{ $param_href->{TABLES} } or $log->logcroak('no $TABLES specified on command line!');
+    my $TI_FULLLIST = $TABLES{ti_fulllist};
+	my $nr_dir   = path(path($OUT)->parent, 'nr_genomes');
+	my $ens_dir  = path(path($OUT)->parent, 'ensembl_all');
+	my $jgi_dir  = path(path($OUT)->parent, 'jgi');
+	my $ext_dir  = path(path($OUT)->parent, 'external');
+
+			
+	#get new handle
+    my $dbh = dbi_connect($param_href);
+
+	#get all tax_ids in TI_FULLLIST
+    my $tis_query = qq{
+    SELECT ti
+    FROM $TI_FULLLIST
+    ORDER BY ti
+    };
+    my @tis = map { $_->[0] } @{ $dbh->selectall_arrayref($tis_query) };
+
+	#clean $OUT dir before use
+	if ( -d $OUT ) {
+            path($OUT)->remove_tree and $log->warn(qq|Action: dir $OUT removed and cleaned|);
+        }
+    path( $OUT )->mkpath and $log->trace(qq|Action: dir $OUT created empty|);
+
+	#get NR genomes
+	my @nr = File::Find::Rule->file()
+								   ->name(qr/\A\d+\z/)
+								   ->in($nr_dir);
+	#my @nr_tis = map {path($_)->basename} @nr;
+	#print Dumper(\@nr_tis);
+	
+    #get Ensembl genomes
+    my @ens = File::Find::Rule->file()->name(qr/\A\d+\z/)->in($ens_dir);
+	#my @ens_tis = map { path($_)->basename } @ens;
+	#print Dumper( \@ens_tis );
+
+    #get JGI genomes
+    my @jgi = File::Find::Rule->file()->name(qr/\A\d+\z/)->in($jgi_dir);
+	#my @jgi_tis = map { path($_)->basename } @jgi;
+	#print Dumper( \@jgi_tis );
+
+    #get external genomes
+    my @ext = File::Find::Rule->file()->name(qr/\A\d+\z/)->in($ext_dir);
+	#my @ext_tis = map { path($_)->basename } @ext;
+	#print Dumper( \@ext_tis );
+
+	#SECOND PART: copy to $OUT (to all dir) if found in TI_FULLLIST table
+	my $genome_cnt = 0;
+	foreach my $genome (@nr, @ens, @jgi, @ext) {
+		$log->trace( "Action: working on $genome" );
+		my $ti_from_file = path($genome)->basename;
+
+		if (grep {$_ == $ti_from_file} @tis ) {
+			#delete ti_files (genomes) if they exist in $OUT dir
+			my $end_ti_file = path($OUT, $ti_from_file);
+			if (-f $end_ti_file) {
+			unlink $end_ti_file and $log->error( "Action: file $end_ti_file unlinked" );
+			}
+			#copy them from in_dir to $OUT
+            path($genome)->copy($OUT)
+				and $log->debug( "Action: file $genome copied to $end_ti_file" );
+			$genome_cnt++;
+		}
+		else {
+			$log->warn( "Action: file $genome not found in ti_fulllist:$TI_FULLLIST" );
+		}
+	}
+
+	$log->info("Copied $genome_cnt genomes to $OUT");
+	$dbh->disconnect;
+
+	return;
+}
+
 
 
 
@@ -4964,7 +4992,7 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
 
  perl ./lib/CollectGenomes.pm --mode=print_nr_genomes -tbl ti_fulllist=ti_fulllist -tbl nr_ti_fasta=nr_ti_gi_fasta_InnoDB -o ./t/nr -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
- perl ./lib/CollectGenomes.pm --mode=copy_existing_genomes -tbl ti_fulllist=ti_fulllist --in=./ensembl_ftp/ --out=./t/nr -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ perl ./lib/CollectGenomes.pm --mode=merge_existing_genomes -tbl ti_fulllist=ti_fulllist --in=./ensembl_ftp/ --out=./t/nr -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
  Part VII -> download genomes from JGI: (not working)
 
@@ -5002,7 +5030,7 @@ Possible modes:
  del_nr_genomes          => \&del_nr_genomes,
  del_total_genomes           => \&del_total_genomes,
  print_nr_genomes              => \&print_nr_genomes,
- copy_existing_genomes         => \&copy_existing_genomes,
+ merge_existing_genomes         => \&merge_existing_genomes,
  ensembl_vertebrates           => \&ensembl_vertebrates,
  ensembl_ftp                   => \&ensembl_ftp,
  prepare_cdhit_per_phylostrata => \&prepare_cdhit_per_phylostrata,
@@ -5103,50 +5131,70 @@ For help write:
 
  perl ./lib/CollectGenomes.pm --mode=nr_genome_counts --tables nr=nr_ti_gi_fasta_TokuDB --tables names=names_raw_2015_9_3_new -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=TokuDB
  #Action: import to nr_ti_gi_fasta_TokuDB_cnt inserted 455063 rows in 900 sec 
+ #Action: update to nr_ti_gi_fasta_TokuDB_cnt updated 455063 rows!
  
  ### Part VI -> combine nr genomes with Ensembl genomes and print them out:
  #deletes genomes from nr_cnt table that are present in ti_files (downloaded from Ensembl)
  #it also deletes genomes smaller than 2000 sequences
  perl ./lib/CollectGenomes.pm --mode=get_missing_genomes --tables nr_cnt=nr_ti_gi_fasta_TokuDB_cnt -tbl ti_files=ti_files -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=TokuDB
- #Table nr_ti_gi_fasta_TokuDB_cnt deleted 21139 rows!
+ #Action: table nr_ti_gi_fasta_TokuDB_cnt deleted 21139 rows!
+ #Action: table nr_ti_gi_fasta_TokuDB_cnt deleted 427679 rows!
  #it also deletes all genomes having 'group' in name
  #prints report at end
+ #Report: found 6225 genomes larger than 2000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 4854 genomes larger than 3000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 3533 genomes larger than 4000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 2589 genomes larger than 5000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 1981 genomes larger than 6000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 1562 genomes larger than 7000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 1296 genomes larger than 8000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 1087 genomes larger than 9000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 959 genomes larger than 10000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 618 genomes larger than 15000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 468 genomes larger than 20000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 373 genomes larger than 25000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 26 genomes larger than 300000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
 
  perl ./lib/CollectGenomes.pm --mode=del_nr_genomes -tbl nr_cnt=nr_ti_gi_fasta_TokuDB_cnt -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
  #deletes genomes with species and strain genomes overlaping (nr only)
- #Report: found 5928 genomes larger than 2000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
- #Report: found 4600 genomes larger than 3000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
- #Report: found 3325 genomes larger than 4000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
- #Report: found 2404 genomes larger than 5000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
- #Report: found 1805 genomes larger than 6000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
- #Report: found 1396 genomes larger than 7000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
- #Report: found 1139 genomes larger than 8000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
- #Report: found 939 genomes larger than 9000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
- #Report: found 813 genomes larger than 10000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
- #Report: found 501 genomes larger than 15000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
- #Report: found 365 genomes larger than 20000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
- #Report: found 285 genomes larger than 25000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
- #Report: found 3 genomes larger than 300000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 6096 genomes larger than 2000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 4750 genomes larger than 3000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 3446 genomes larger than 4000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 2510 genomes larger than 5000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 1907 genomes larger than 6000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 1494 genomes larger than 7000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 1232 genomes larger than 8000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 1027 genomes larger than 9000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 900 genomes larger than 10000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 565 genomes larger than 15000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 417 genomes larger than 20000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 327 genomes larger than 25000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 9 genomes larger than 300000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
  
  perl ./lib/CollectGenomes.pm --mode=del_total_genomes -tbl nr_cnt=nr_ti_gi_fasta_TokuDB_cnt -tbl ti_files=ti_files -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -en=TokuDB
  #imports nr and existing genomes
- #deletes hybrid genomes
- #Action: import inserted 5928 rows!
+ #Action: import inserted 6096 rows!
  #Action: import inserted 21163 rows!
  #Action: deleted 2 hybrid species from ti_fulllist
- #Report: found 25063 genomes in table:ti_fulllist
+ #Report: found 26265 genomes in table:ti_fulllist
  
  #extract nr genomes after filtering
  perl ./lib/CollectGenomes.pm --mode=print_nr_genomes -tbl ti_fulllist=ti_fulllist -tbl nr_ti_fasta=nr_ti_gi_fasta_TokuDB -o /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_genomes/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
- #printed 4111 genomes
+ #printed 5195 genomes
 
- #copy genomes from previuos database not in this one
+ #copy genomes from previous database not in this one
  perl ./lib/CollectGenomes.pm --mode=copy_external_genomes -tbl ti_fulllist=ti_fulllist -tbl names=names_raw_2015_9_3_new --in=/home/msestak/dropbox/Databases/db_29_07_15/data/eukarya --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/external/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
- #255 genomes inserted
+ #254 genomes inserted
 
+ #delete duplicates from final database
+ perl ./lib/CollectGenomes.pm --mode=del_species_with_strain -tbl ti_fulllist=ti_fulllist -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ #Action: deleted 1 hybrid species from ti_fulllist
+ #10 genomes deleted
+ #Report: found 26508 genomes in table:ti_fulllist
 
-
-
+ #merge all genomes to all:
+ perl ./lib/CollectGenomes.pm --mode=merge_existing_genomes -o /home/msestak/dropbox/Databases/db_02_09_2015/data/all/ -tbl ti_fulllist=ti_fulllist -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ #Copied 26465 genomes to /home/msestak/dropbox/Databases/db_02_09_2015/data/all (43 GB)
 
 
 
@@ -5191,6 +5239,7 @@ For help write:
 
  #perl ./lib/CollectGenomes.pm --mode=nr_genome_counts --tables nr=nr_ti_gi_fasta_Deep --tables names=names_raw_2015_9_3_new -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5626 -s /tmp/mysql_sandbox5626.sock --engine=Deep
  #Action: import to nr_ti_gi_fasta_Deep_cnt inserted 455063 rows in 200 sec
+ #Action: update to nr_ti_gi_fasta_Deep_cnt updated 455063 rows!
  
  ### Part VI -> combine nr genomes with Ensembl genomes and print them out:
  #deletes genomes from nr_cnt table that are present in ti_files (downloaded from Ensembl)
@@ -5243,6 +5292,7 @@ For help write:
 
 
  perl ./lib/CollectGenomes.pm --mode=copy_external_genomes -tbl ti_fulllist=ti_fulllist -tbl names=names_raw_2015_9_3_new --in=/home/msestak/dropbox/Databases/db_29_07_15/data/eukarya --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/external/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ perl ./lib/CollectGenomes.pm --mode=del_species_with_strain -tbl ti_fulllist=ti_fulllist -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
 
 =head1 LICENSE
