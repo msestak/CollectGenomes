@@ -3661,60 +3661,6 @@ sub print_nr_genomes {
 
 
 ### INTERFACE SUB ###
-# Usage      : run_cdhit( $param_href );
-# Purpose    : it runs cd-hit from command line (not from PBS script)
-# Returns    : nothing
-# Parameters : ( $param_href )
-# Throws     : croaks for parameters
-# Comments   : it needs indir for genomes and outdir
-#            : creates total db at end
-# See Also   : run first: perl blastdb_analysis.pl --mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_martin7 -t 7955 -org dr -h localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
-sub run_cdhit {
-    my $log = Log::Log4perl::get_logger("main");
-    $log->logcroak('run_cdhit() needs a $param_href') unless @_ == 1;
-    my ($param_href) = @_;
-
-    my $DATABASE = $param_href->{DATABASE} or $log->logcroak('no $DATABASE specified on command line!');
-    my $INFILE   = $param_href->{INFILE}   or $log->logcroak('no $INFILE specified on command line!');
-    my $OUT      = $param_href->{OUT}      or $log->logcroak('no $OUT specified on command line!');
-
-	my $cmd_file;
-	$cmd_file = path($INFILE)->slurp or $log->logdie(qq|Report: Can't open cd-hit command-file $cmd_file|);
-	my @cmd_lines = split("\n", $cmd_file);
-	@cmd_lines = reverse @cmd_lines;   #start from last phylostratum
-
-	foreach my $cmd (@cmd_lines) {
-		chomp;
-		(my $ps = $cmd) =~ m{(ps\d+)}g;
-		my ($stdout_cd, $stderr_cd, $exit_cd) = capture_output( $cmd, $param_href );
-			if ($exit_cd == 0) {
-				my @lines = split("\n", $stdout_cd);
-				my ($input_seqs1, $input_seqs2, $clusters);
-				for (@lines) {
-					when (m/\Atotal seq:\s+(\d+)/) {$input_seqs1 = $1;}
-					when (m/(\d+)\s+finished\s+(\d+)\s+clusters/) { $input_seqs2 = $1; $clusters = $2;}
-				}
-				if ($input_seqs1 != $input_seqs2) {
-					$log->error(qq|Report: some sequences skipped because of errors|);
-				}
-
-				$log->trace(qq|Action: cd-hit for $ps with:$input_seqs2 and OUT:$clusters clusters|);
-
-			}
-			else {
-				$log->error(qq|Action: $cmd failed|);
-			}
-
-			sleep 10;
-
-	}
-
-	return;
-
-}
-
-
-### INTERFACE SUB ###
 # Usage      : make_db_dirs( $param_href );
 # Purpose    : creates directories to store files for creation of new database
 # Returns    : nothing
@@ -3743,12 +3689,11 @@ sub make_db_dirs {
       data/ensembl_all
       data/nr_raw
       data/nr_genomes
-      data/all_genomes
-      data/cdhit
       data/jgi
       data/xml
       data/external
       data/all
+      data/cdhit
       doc
       src
 	  };
@@ -4777,10 +4722,10 @@ sub prepare_cdhit_per_phylostrata {
     $log->debug(qq|Report: $ps_num phylostrata:{@ps_columns}|);
 
 	#make a backup copy of PHYLO table
-	my $ph_copy = create_table_copy( { ORIG => $PHYLO, %{$param_href} } );
+	#my $ph_copy = create_table_copy( { ORIG => $PHYLO, %{$param_href} } );
 
 	#create copy of copy of $ORIG table (just in case)
-	my $ph_backup = create_table_copy( { ORIG => $PHYLO, TO => "${PHYLO}_backup", %{$param_href} } );
+	#my $ph_backup = create_table_copy( { ORIG => $PHYLO, TO => "${PHYLO}_backup", %{$param_href} } );
 
     #collect all genomes from $IN
     my @ti_files = File::Find::Rule->file()->name(qr/\A\d+\z/)->in($IN);
@@ -4800,7 +4745,8 @@ sub prepare_cdhit_per_phylostrata {
             path($ps_path)->remove_tree and $log->warn(qq|Action: dir $ps_path removed|);
         }
         path( $ps_path )->mkpath and $log->trace(qq|Action: dir $ps_path created|);
-
+		
+		#if ti in this phylostratum copy it to this ps directory
         my $select_ti = sprintf( qq{
 		SELECT %s
 		FROM %s
@@ -4856,39 +4802,39 @@ sub prepare_cdhit_per_phylostrata {
 
 	#run cleanup of $PHYLO table for all phylostrata that have no genomes
 	my @fa_files = File::Find::Rule->file()->name(qr/\Aps\d+\.fa\z/)->in($OUT);
-	#$log->trace("FA_FILES:@fa_files");
+	$log->trace("FA_FILES:@fa_files");
 	my @ps_names = map { path($_)->basename } @fa_files;
 	@ps_names = map { /(\Aps\d+)/ } @ps_names;
+	@ps_names = sort @ps_names;
 	$log->trace("PS_NAMES:@ps_names");
-	#say "PS_COLUMNS:@ps_columns";
+	my %ps_
+
+	say "PS_COLUMNS:@ps_columns";
 	my @drop_ps;
-	foreach my $ps (@ps_names) {
-		@drop_ps = map { $ps eq $_ ? () : $_} @ps_columns;
-	}
-	#say "DROP_PS:@drop_ps";
+	say "DROP_PS:@drop_ps";
 	my $droplist = join ", ", map { "DROP COLUMN $_" } @drop_ps;
-	#$log->trace( "DROPLIST:$droplist" );
+	$log->trace( "DROPLIST:$droplist" );
 
 	my $del_list = join " AND ", map { "$_ IS NULL" } @ps_names;
-	#$log->trace("DEL_LIST:$del_list");
+	$log->trace("DEL_LIST:$del_list");
 
 	my $alter_q = qq{
 	ALTER TABLE $PHYLO $droplist 
 	};
 	$log->trace("$alter_q");
-	eval{ $dbh->do($alter_q)};
-	$log->error( "Action: altering table $PHYLO failed: $@" ) if $@;
-	$log->trace( "Action: table $PHYLO altered:{@drop_ps} dropped" ) unless $@;
+	#	eval{ $dbh->do($alter_q)};
+	#	$log->error( "Action: altering table $PHYLO failed: $@" ) if $@;
+	#	$log->info( "Action: table $PHYLO altered:{@drop_ps} dropped" ) unless $@;
 
 	my $del_q = qq{
 	DELETE ph FROM $PHYLO AS ph
 	WHERE $del_list
 	};
 	$log->trace("$del_q");
-	my $del_rows;
-	eval{ $del_rows = $dbh->do($del_q)};
-	$log->error( "Action: deleting table $PHYLO failed: $@" ) if $@;
-	$log->trace( "Action: table $PHYLO deleted $del_rows rows" ) unless $@;
+	#	my $del_rows;
+	#	eval{ $del_rows = $dbh->do($del_q)};
+	#	$log->error( "Action: deleting table $PHYLO failed: $@" ) if $@;
+	#	$log->trace( "Action: table $PHYLO deleted $del_rows rows" ) unless $@;
 
     my $rows_left = $dbh->selectrow_array("SELECT COUNT(*) FROM $PHYLO");
     $log->info("Report: table $PHYLO has $rows_left rows");
@@ -5020,6 +4966,59 @@ TORQUE
 }
 
 
+### INTERFACE SUB ###
+# Usage      : run_cdhit( $param_href );
+# Purpose    : it runs cd-hit from command line (not from PBS script)
+# Returns    : nothing
+# Parameters : ( $param_href )
+# Throws     : croaks for parameters
+# Comments   : it needs indir for genomes and outdir
+#            : creates total db at end
+# See Also   : run first: perl blastdb_analysis.pl --mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_martin7 -t 7955 -org dr -h localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+sub run_cdhit {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('run_cdhit() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    my $DATABASE = $param_href->{DATABASE} or $log->logcroak('no $DATABASE specified on command line!');
+    my $INFILE   = $param_href->{INFILE}   or $log->logcroak('no $INFILE specified on command line!');
+    my $OUT      = $param_href->{OUT}      or $log->logcroak('no $OUT specified on command line!');
+
+	my $cmd_file;
+	$cmd_file = path($INFILE)->slurp or $log->logdie(qq|Report: Can't open cd-hit command-file $cmd_file|);
+	my @cmd_lines = split("\n", $cmd_file);
+	@cmd_lines = reverse @cmd_lines;   #start from last phylostratum
+
+	foreach my $cmd (@cmd_lines) {
+		chomp;
+		(my $ps = $cmd) =~ m{(ps\d+)}g;
+		my ($stdout_cd, $stderr_cd, $exit_cd) = capture_output( $cmd, $param_href );
+			if ($exit_cd == 0) {
+				my @lines = split("\n", $stdout_cd);
+				my ($input_seqs1, $input_seqs2, $clusters);
+				for (@lines) {
+					when (m/\Atotal seq:\s+(\d+)/) {$input_seqs1 = $1;}
+					when (m/(\d+)\s+finished\s+(\d+)\s+clusters/) { $input_seqs2 = $1; $clusters = $2;}
+				}
+				if ($input_seqs1 != $input_seqs2) {
+					$log->error(qq|Report: some sequences skipped because of errors|);
+				}
+
+				$log->trace(qq|Action: cd-hit for $ps with:$input_seqs2 and OUT:$clusters clusters|);
+
+			}
+			else {
+				$log->error(qq|Action: $cmd failed:$stderr_cd|);
+			}
+
+			sleep 10;
+
+	}
+
+	return;
+
+}
+
 
 
 
@@ -5112,7 +5111,7 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
  perl ./bin/CollectGenomes.pm --mode=prepare_cdhit_per_phylostrata --in=/home/msestak/dropbox/Databases/db_29_07_15/data/archaea/ --out=/home/msestak/dropbox/Databases/db_29_07_15/data/cdhit/ -ho localhost -d nr -u msandbox -p msandbox -po 5622 -s /tmp/mysql_sandbox5622.sock
 
 
- perl ./bin/CollectGenomes.pm --mode=run_cdhit --in=/home/msestak/dropbox/Databases/db_29_07_15/data/cdhit/cd_hit_cmds --out=/home/msestak/dropbox/Databases/db_29_07_15/data/cdhit/ -ho localhost -d nr -u msandbox -p msandbox -po 5622 -s /tmp/mysql_sandbox5622.sock -v
+ perl ./bin/CollectGenomes.pm --mode=run_cdhit --if=/home/msestak/dropbox/Databases/db_29_07_15/data/cdhit/cd_hit_cmds --out=/home/msestak/dropbox/Databases/db_29_07_15/data/cdhit/ -ho localhost -d nr -u msandbox -p msandbox -po 5622 -s /tmp/mysql_sandbox5622.sock -v
 
  Part VIII -> prepare BLAST and run it:
 
@@ -5306,9 +5305,18 @@ For help write:
  #Copied 26465 genomes to /home/msestak/dropbox/Databases/db_02_09_2015/data/all (43 GB)
 
  ### Part VIII -> prepare and run cd-hit
- perl ./bin/CollectGenomes.pm --mode=prepare_cdhit_per_phylostrata --in=./data_in/t_eukarya/ --out=./data_out/ -tbl phylo=phylo_7955 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
- perl ./bin/CollectGenomes.pm --mode=prepare_cdhit_per_phylostrata --in=/home/msestak/dropbox/Databases/db_29_07_15/data/archaea/ --out=/home/msestak/dropbox/Databases/db_29_07_15/data/cdhit/ -ho localhost -d nr -u msandbox -p msandbox -po 5622 -s /tmp/mysql_sandbox5622.sock
-
+ perl ./lib/CollectGenomes.pm --mode=prepare_cdhit_per_phylostrata --in=/home/msestak/dropbox/Databases/db_02_09_2015/data/all/ --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ -tbl phylo=phylo_7955 -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ #[2015/09/10 14:32:55,739]Report: 34 phylostrata:{ps1 ps2 ps3 ps4 ps5 ps6 ps7 ps8 ps9 ps10 ps11 ps12 ps13 ps14 ps15 ps16 ps17 ps18 ps19 ps20 ps21 ps22 ps23 ps24 ps25 ps26 ps27 ps28 ps29 ps30 ps31 ps32 ps33 ps34}
+ #[2015/09/10 14:33:57,226]Action: table phylo_7955_copy inserted 1121881 rows!
+ #[2015/09/10 14:35:01,741]Action: table phylo_7955_backup_24641 inserted 1121881 rows!
+ #[2015/09/10 14:35:02,087]Action: dir /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit removed and cleaned
+ #[2015/09/10 14:35:02,088]Action: dir /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit created empty
+ #[2015/09/10 14:35:02,088]Action: dir /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps1 created
+ #[2015/09/10 14:35:02,171]Action: File /home/msestak/dropbox/Databases/db_02_09_2015/data/all/100053 copied to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps1
+ #Action: concatenated 25031 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps1.fa
+ #Action: dir /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps1 removed
+ #/home/msestak/kclust/cdhit/cd-hit-v4.6.1-2012-08-27/cd-hit -i /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps1.fa -o /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps1 -c 0.9 -n 5 -M 0 -T 0 -d 200
+ #Action: TORQUE script printed to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps1.pbs
 
  perl ./bin/CollectGenomes.pm --mode=run_cdhit --in=/home/msestak/dropbox/Databases/db_29_07_15/data/cdhit/cd_hit_cmds --out=/home/msestak/dropbox/Databases/db_29_07_15/data/cdhit/ -ho localhost -d nr -u msandbox -p msandbox -po 5622 -s /tmp/mysql_sandbox5622.sock -v
 
