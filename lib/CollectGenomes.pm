@@ -2783,147 +2783,6 @@ sub export_all_nr_genomes {
 }
 
 
-### INTERFACE SUB ###
-# Usage      : get_existing_ti( $param_href );
-# Purpose    : collects tax_ids from tiktaalik and inserts it as a table in db
-# Returns    : nothing
-# Parameters : ( $param_href )
-# Throws     : croaks for parameters
-# Comments   : 
-# See Also   : 
-sub get_existing_ti {
-    my $log = Log::Log4perl::get_logger("main");
-    $log->logcroak( 'get_existing_ti() needs a $param_href' ) unless @_ == 1;
-    my ( $param_href ) = @_;
-
-    my $ENGINE = defined $param_href->{ENGINE} ? $param_href->{ENGINE} : 'InnoDB';
-    my $IN       = $param_href->{IN}       or $log->logcroak('no $IN specified on command line!');
-    my $OUT      = $param_href->{OUT}      or $log->logcroak('no $OUT specified on command line!');
-    my $DATABASE = $param_href->{DATABASE} or $log->logcroak('no $DATABASE specified on command line!');
-    my %TABLES   = %{ $param_href->{TABLES} };
-    my $NAMES_TABLE = $TABLES{names};
-
-	#collect genomes from $IN
-	my @ti_files = File::Find::Rule->file()
-								   ->name(qr/\A\d+\z/)
-								   ->in($IN);
-	my @tis;
-	foreach my $file (@ti_files) {
-		my $ti = path($file)->basename;
-		push @tis, $ti;
-	}
-	my @tis_sorted = sort {$a <=> $b} @tis;
-
-	#print to file for MakeTree
-	my $ti_files_path = path($OUT, 'ti_files');
-	open my $ti_fh, ">:encoding(ASCII)", $ti_files_path or $log->logdie("Error: can't write to $ti_files_path:$!");
-	foreach (@tis_sorted) {
-		say {$ti_fh} $_;
-	}
-
-	#get new database handle
-	my $dbh = dbi_connect($param_href);
-
-	#insert tax_ids into the database
-	my $table_ti = "ti_files";
-    my $create_query = qq{
-    CREATE TABLE $table_ti (
-    ti INT UNSIGNED NOT NULL,
-	species_name VARCHAR(200) NULL,
-    PRIMARY KEY(ti),
-	KEY(species_name)
-    )ENGINE=$ENGINE CHARSET=ascii };
-    eval { $dbh->do($create_query) };
-	create_table( { TABLE_NAME => $table_ti, DBH => $dbh, QUERY => $create_query, %{$param_href} } );
-
-
-    #now insert in single transaction (performance better)
-	$dbh->{AutoCommit} = 0;    # enable transactions, if possible
-    eval {
-        my $insert_query = qq{
-        INSERT INTO $table_ti (ti)
-		VALUES (?)
-        };
-        my $sth = $dbh->prepare($insert_query);
-		foreach my $ti (@tis_sorted) {
-			$sth->execute($ti);
-		}
-
-        $dbh->commit;          # commit the changes if we get this far
-		$log->debug( "Table $table_ti inserted successfully!");
-    };
-    if ($@) {
-        $log->logcarp( "Transaction aborted because $@" );
-
-        # now rollback to undo the incomplete changes
-        # but do it in an eval{} as it may also fail
-        eval { $dbh->rollback };
-
-        # add other application on-error-clean-up code here
-        if ($@) {
-            $log->logcarp( "Inserting into $table_ti failed! Transaction failed to commit and failed to rollback!" );
-        }
-    }
-
-	#species with changed tax_ids
-	my %sp_changed = (
-		#473542 => 'Caenorhabditis briggsae',
-		245018 => 649756,
-		1525716 => 1545044,
-		#1525718 => 1545044,
-		473542   => 6238
-	);
-	while (my ($old_ti, $new_ti) = each %sp_changed) {
-		my $update_ch = qq{
-		UPDATE $table_ti
-		SET ti = $new_ti
-		WHERE ti = $old_ti
-		};
-		eval { $dbh->do($update_ch, { async => 1 } ) };
-		my $rows_ch = $dbh->mysql_async_result;
-    	$log->debug( "Action: update to $table_ti for $old_ti to $new_ti updated $rows_ch rows!" ) unless $@;
-    	$log->error( "Action: updating $table_ti for for $old_ti to $new_ti failed: $@" ) if $@;
-	}
-
-	#UPDATE with species_names
-	$dbh->{AutoCommit} = 1;    # disable transactions
-    my $update_query = qq{
-	UPDATE $table_ti AS ti
-	SET ti.species_name = (SELECT DISTINCT na.species_name
-	FROM $NAMES_TABLE AS na WHERE ti.ti = na.ti);
-    };
-    eval { $dbh->do($update_query, { async => 1 } ) };
-	my $rows = $dbh->mysql_async_result;
-    $log->debug( "Action: update to $table_ti updated $rows rows!" ) unless $@;
-
-    $log->error( "Action: updating $table_ti failed: $@" ) if $@;
-    $log->debug( "Action: table $table_ti updated successfully!" ) unless $@;
-
-	#update for Hydra magnipapillata
-	#species_excluded from NCBI but present in our db
-    my %sp_ex_ncbi = (
-        6085    => 'Hydra magnipapillata',
-        1525718 => 'Paracoccus_sp ._39524',
-    );
-	while (my ($ti, $species_name) = each %sp_ex_ncbi) {
-		my $update_q = qq{
-		UPDATE $table_ti
-		SET species_name = '$species_name'
-		WHERE ti = $ti
-		};
-		eval { $dbh->do($update_q, { async => 1 } ) };
-		my $rows_up = $dbh->mysql_async_result;
-    	$log->debug( "Action: update to $table_ti for $species_name updated $rows_up rows!" ) unless $@;
-    	$log->error( "Action: updating $table_ti for $species_name failed: $@" ) if $@;
-	}
-
-
-
-	$dbh->disconnect;
-
-	return;
-
-}
 
 
 ### INTERFACE SUB ###
@@ -5025,6 +4884,295 @@ sub run_cdhit {
 
 }
 
+### INTERFACE SUB ###
+# Usage      : get_existing_ti( $param_href );
+# Purpose    : collects tax_ids from tiktaalik and inserts it as a table in db
+# Returns    : nothing
+# Parameters : ( $param_href )
+# Throws     : croaks for parameters
+# Comments   : 
+# See Also   : 
+sub get_existing_ti {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak( 'get_existing_ti() needs a $param_href' ) unless @_ == 1;
+    my ( $param_href ) = @_;
+
+    my $ENGINE = defined $param_href->{ENGINE} ? $param_href->{ENGINE} : 'InnoDB';
+    my $IN       = $param_href->{IN}       or $log->logcroak('no $IN specified on command line!');
+    my $OUT      = $param_href->{OUT}      or $log->logcroak('no $OUT specified on command line!');
+    my $DATABASE = $param_href->{DATABASE} or $log->logcroak('no $DATABASE specified on command line!');
+    my %TABLES   = %{ $param_href->{TABLES} };
+    my $NAMES    = $TABLES{names};
+
+	#collect genomes from $IN
+	my @ti_files = File::Find::Rule->file()
+								   ->name(qr/\A\d+\z/)
+								   ->in($IN);
+	#say "FILES:@ti_files";
+	#sort files by number (Schwartzian transform)
+    my @sorted_files =
+	    map { $_->[0] }                    #return full filename (aref position 0)
+	    sort { $a->[2] <=> $b->[2] }       #sort by num (ref position 2)
+        map { [ $_, /\A(\D*)(\d+)\z/ ] }   #aref with [file, basename, num]
+        @ti_files;
+	say "SORTED:", Dumper(\@sorted_files);
+
+	#get new database handle
+	my $dbh = dbi_connect($param_href);
+
+	#insert tax_ids into the database
+	my $table_ti = "ti_files";
+    my $create_q = qq{
+    CREATE TABLE $table_ti (
+    ti INT UNSIGNED NOT NULL,
+	genes_cnt INT UNSIGNED NOT NULL,
+	species_name VARCHAR(200) NULL,
+	source VARCHAR(20) NOT NULL,
+    PRIMARY KEY(ti),
+	KEY(genes_cnt),
+	KEY(species_name)
+    )ENGINE=$ENGINE CHARSET=ascii };
+    eval { $dbh->do($create_q) };
+	create_table( { TABLE_NAME => $table_ti, DBH => $dbh, QUERY => $create_q, %{$param_href} } );
+
+	#prepare select species_name query
+	my $sel_sp = qq{
+	SELECT species_name
+	FROM $NAMES
+	WHERE ti = ?
+	};
+	my $sth_sel = $dbh->prepare($sel_sp);
+
+	#prepare insert ti_files query
+	my $ins_q = qq{
+	INSERT INTO $table_ti (ti, genes_cnt, species_name, source)
+	VALUES( ?, ?, ?, ? )
+	};
+	my $sth_ins = $dbh->prepare($ins_q);
+
+	#iterate over files, count records and insert to table (ti, genes_cnt, species_name, 'Ensembl'):w
+	foreach my $ti_file (@sorted_files) {
+		my $ti = path($ti_file)->basename;
+		#say "TI:$ti";
+
+		my $fasta_cnt = 0;
+		{   #count fasta records
+			local $/ = ">";
+			open my $ti_fh, "<", $ti_file or $log->logdie("Error: can't open $ti_file:$!");
+			while (<$ti_fh>) {
+				chomp;
+				if (/\A(.+)\z/s) {
+					$fasta_cnt++;
+				}
+			}
+			close $ti_fh;
+		}
+		#say "Records:$fasta_cnt";
+
+		$sth_sel->execute($ti);
+		my ($species_name) = $sth_sel->fetchrow_array();
+		#say "SPECIES:$species_name";
+
+		#insert into table
+		eval {$sth_ins->execute($ti, $fasta_cnt, $species_name, 'Ensembl'); };
+		my $rows_ins = $sth_ins->rows;
+		$log->error("Action: failed insert to table $table_ti") if $@;
+		$log->debug("Action: table $table_ti inserted $rows_ins rows") unless $@;
+	}
+
+	#species with changed tax_ids
+	my %sp_changed = (
+		#473542 => 'Caenorhabditis briggsae',
+		245018 => 649756,
+		1525716 => 1545044,
+		#1525718 => 1545044,
+		473542   => 6238
+	);
+	while (my ($old_ti, $new_ti) = each %sp_changed) {
+		my $update_ch = qq{
+		UPDATE $table_ti
+		SET ti = $new_ti
+		WHERE ti = $old_ti
+		};
+		eval { $dbh->do($update_ch, { async => 1 } ) };
+		my $rows_ch = $dbh->mysql_async_result;
+    	$log->debug( "Action: update to $table_ti for $old_ti to $new_ti updated $rows_ch rows!" ) unless $@;
+    	$log->error( "Action: updating $table_ti for for $old_ti to $new_ti failed: $@" ) if $@;
+	}
+
+	#update for Hydra magnipapillata
+	#species_excluded from NCBI but present in our db
+    my %sp_ex_ncbi = (
+        6085    => 'Hydra magnipapillata',
+        1525718 => 'Paracoccus_sp ._39524',
+    );
+	while (my ($ti, $species_name) = each %sp_ex_ncbi) {
+		my $update_q = qq{
+		UPDATE $table_ti
+		SET species_name = '$species_name'
+		WHERE ti = $ti
+		};
+		eval { $dbh->do($update_q, { async => 1 } ) };
+		my $rows_up = $dbh->mysql_async_result;
+    	$log->debug( "Action: update to $table_ti for $species_name updated $rows_up rows!" ) unless $@;
+    	$log->error( "Action: updating $table_ti for $species_name failed: $@" ) if $@;
+	}
+
+	#print to file for MakeTree
+	my $ti_files_path = path($OUT, 'ti_files');
+	open my $ti_fh, ">:encoding(ASCII)", $ti_files_path or $log->logdie("Error: can't write to $ti_files_path:$!");
+	#select q for all tis
+	my $tis_query = qq{
+    SELECT ti
+    FROM $table_ti
+    };
+    my @tis = map { $_->[0] } @{ $dbh->selectall_arrayref($tis_query) };
+	foreach (@tis) {
+		say {$ti_fh} $_;
+	}
+
+	#report number of genomes in ti_files table
+    my $rows_end = $dbh->selectrow_array("SELECT COUNT(*) FROM $table_ti");
+    $log->info("Report: table $table_ti has $rows_end rows");
+
+    $dbh->disconnect;
+    return;
+}
+
+#not used anymore
+sub get_existing_ti2 {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak( 'get_existing_ti() needs a $param_href' ) unless @_ == 1;
+    my ( $param_href ) = @_;
+
+    my $ENGINE = defined $param_href->{ENGINE} ? $param_href->{ENGINE} : 'InnoDB';
+    my $IN       = $param_href->{IN}       or $log->logcroak('no $IN specified on command line!');
+    my $OUT      = $param_href->{OUT}      or $log->logcroak('no $OUT specified on command line!');
+    my $DATABASE = $param_href->{DATABASE} or $log->logcroak('no $DATABASE specified on command line!');
+    my %TABLES   = %{ $param_href->{TABLES} };
+    my $NAMES_TABLE = $TABLES{names};
+
+	#collect genomes from $IN
+	my @ti_files = File::Find::Rule->file()
+								   ->name(qr/\A\d+\z/)
+								   ->in($IN);
+	my @tis;
+	foreach my $file (@ti_files) {
+		my $ti = path($file)->basename;
+		push @tis, $ti;
+	}
+	my @tis_sorted = sort {$a <=> $b} @tis;
+
+	#print to file for MakeTree
+	my $ti_files_path = path($OUT, 'ti_files');
+	open my $ti_fh, ">:encoding(ASCII)", $ti_files_path or $log->logdie("Error: can't write to $ti_files_path:$!");
+	foreach (@tis_sorted) {
+		say {$ti_fh} $_;
+	}
+
+	#get new database handle
+	my $dbh = dbi_connect($param_href);
+
+	#insert tax_ids into the database
+	my $table_ti = "ti_files";
+    my $create_query = qq{
+    CREATE TABLE $table_ti (
+    ti INT UNSIGNED NOT NULL,
+	species_name VARCHAR(200) NULL,
+    PRIMARY KEY(ti),
+	KEY(species_name)
+    )ENGINE=$ENGINE CHARSET=ascii };
+    eval { $dbh->do($create_query) };
+	create_table( { TABLE_NAME => $table_ti, DBH => $dbh, QUERY => $create_query, %{$param_href} } );
+
+
+    #now insert in single transaction (performance better)
+	$dbh->{AutoCommit} = 0;    # enable transactions, if possible
+    eval {
+        my $insert_query = qq{
+        INSERT INTO $table_ti (ti)
+		VALUES (?)
+        };
+        my $sth = $dbh->prepare($insert_query);
+		foreach my $ti (@tis_sorted) {
+			$sth->execute($ti);
+		}
+
+        $dbh->commit;          # commit the changes if we get this far
+		$log->debug( "Table $table_ti inserted successfully!");
+    };
+    if ($@) {
+        $log->logcarp( "Transaction aborted because $@" );
+
+        # now rollback to undo the incomplete changes
+        # but do it in an eval{} as it may also fail
+        eval { $dbh->rollback };
+
+        # add other application on-error-clean-up code here
+        if ($@) {
+            $log->logcarp( "Inserting into $table_ti failed! Transaction failed to commit and failed to rollback!" );
+        }
+    }
+
+	#species with changed tax_ids
+	my %sp_changed = (
+		#473542 => 'Caenorhabditis briggsae',
+		245018 => 649756,
+		1525716 => 1545044,
+		#1525718 => 1545044,
+		473542   => 6238
+	);
+	while (my ($old_ti, $new_ti) = each %sp_changed) {
+		my $update_ch = qq{
+		UPDATE $table_ti
+		SET ti = $new_ti
+		WHERE ti = $old_ti
+		};
+		eval { $dbh->do($update_ch, { async => 1 } ) };
+		my $rows_ch = $dbh->mysql_async_result;
+    	$log->debug( "Action: update to $table_ti for $old_ti to $new_ti updated $rows_ch rows!" ) unless $@;
+    	$log->error( "Action: updating $table_ti for for $old_ti to $new_ti failed: $@" ) if $@;
+	}
+
+	#UPDATE with species_names
+	$dbh->{AutoCommit} = 1;    # disable transactions
+    my $update_query = qq{
+	UPDATE $table_ti AS ti
+	SET ti.species_name = (SELECT DISTINCT na.species_name
+	FROM $NAMES_TABLE AS na WHERE ti.ti = na.ti);
+    };
+    eval { $dbh->do($update_query, { async => 1 } ) };
+	my $rows = $dbh->mysql_async_result;
+    $log->debug( "Action: update to $table_ti updated $rows rows!" ) unless $@;
+
+    $log->error( "Action: updating $table_ti failed: $@" ) if $@;
+    $log->debug( "Action: table $table_ti updated successfully!" ) unless $@;
+
+	#update for Hydra magnipapillata
+	#species_excluded from NCBI but present in our db
+    my %sp_ex_ncbi = (
+        6085    => 'Hydra magnipapillata',
+        1525718 => 'Paracoccus_sp ._39524',
+    );
+	while (my ($ti, $species_name) = each %sp_ex_ncbi) {
+		my $update_q = qq{
+		UPDATE $table_ti
+		SET species_name = '$species_name'
+		WHERE ti = $ti
+		};
+		eval { $dbh->do($update_q, { async => 1 } ) };
+		my $rows_up = $dbh->mysql_async_result;
+    	$log->debug( "Action: update to $table_ti for $species_name updated $rows_up rows!" ) unless $@;
+    	$log->error( "Action: updating $table_ti for $species_name failed: $@" ) if $@;
+	}
+
+
+
+	$dbh->disconnect;
+
+	return;
+
+}
 
 
 
