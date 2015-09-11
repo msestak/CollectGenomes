@@ -3093,7 +3093,7 @@ sub del_nr_genomes {
 # Returns    : nothing
 # Parameters : ( $param_href )
 # Throws     : croaks for parameters
-# Comments   : first it creates ti_fulllist table to hold all genomes
+# Comments   : first it creates ti_full_list table to hold all genomes
 #            : deletes hybrid genomes
 #            : it deletes genomes that have species and strain genomes in full dataset
 #            : (both nr and existing genomes)
@@ -3116,7 +3116,7 @@ sub del_total_genomes {
     $log->info( "---------->JOIN-ing two tables: $NR_CNT_TBL and $TI_FILES_TBL" );
 
     #create table
-	my $table_list = "ti_fulllist";
+	my $table_list = "ti_full_list";
     my $create_query = qq{
     CREATE TABLE $table_list (
     ti INT UNSIGNED NOT NULL,
@@ -3145,7 +3145,7 @@ sub del_total_genomes {
 	#insert existing genomes
     my $insert_ti = qq{
     INSERT INTO $table_list (ti, species_name, source)
-    SELECT ti, species_name, 'Ensembl'
+    SELECT ti, species_name, source
 	FROM $TI_FILES_TBL
 	ORDER BY ti
     };
@@ -3215,7 +3215,7 @@ sub del_total_genomes {
 				print Dumper(\%hash_to_print);     #print group before delete
 				$log->trace( "Action: deleting:$spec" );
 
-				#DELETE species from ti_fulllist table (because it is species with strains present)
+				#DELETE species from ti_full_list table (because it is species with strains present)
 				eval { $sth_del->execute($spec); };
 				my $rows_del_spec = $sth_del->mysql_async_result;
 			    $log->debug( "Action: table $table_list deleted $rows_del_spec rows for:{$spec}" ) unless $@;
@@ -3475,7 +3475,7 @@ sub print_nr_genomes {
     my $DATABASE = $param_href->{DATABASE}    or $log->logcroak('no $DATABASE specified on command line!');
     my %TABLES   = %{ $param_href->{TABLES} } or $log->logcroak('no $TABLES specified on command line!');
     my $NR_TI_FASTA = $TABLES{nr_ti_fasta};
-    my $TI_FULLLIST = $TABLES{ti_fulllist};
+    my $TI_FULLLIST = $TABLES{ti_full_list};
 			
 	#get new handle
     my $dbh = dbi_connect($param_href);
@@ -4173,7 +4173,7 @@ sub copy_external_genomes {
 	my $OUT      = $param_href->{OUT}      or $log->logcroak( 'no $OUT specified on command line!' );
 	my $IN       = $param_href->{IN}   or $log->logcroak( 'no $IN specified on command line!' );
     my %TABLES   = %{ $param_href->{TABLES} } or $log->logcroak('no $TABLES specified on command line!');
-    my $TI_FULLLIST = $TABLES{ti_fulllist};
+    my $TI_FULLLIST = $TABLES{ti_full_list};
     my $NAMES       = $TABLES{names};
 			
 	#get new handle
@@ -4214,16 +4214,16 @@ sub copy_external_genomes {
 	#print Dumper(\@not_found);
 
 	#SECOND check for existence in TI_FULLLIST and copy to external
-	#insert query to insert to ti_fulllist
+	#insert query to insert to ti_full_list
 	my $q_in = qq{
-	INSERT INTO ti_fulllist (ti, genes_cnt, source)
+	INSERT INTO ti_full_list (ti, genes_cnt, source)
 	VALUES (?, ?, 'external')
 	};
 	my $sth = $dbh->prepare($q_in);
 
 	#select query to get ti for comparison to fasta_file
 	my $q_sel = qq{
-	SELECT ti FROM ti_fulllist
+	SELECT ti FROM ti_full_list
 	WHERE ti = ?
 	};
 	my $sth_sel = $dbh->prepare($q_sel);
@@ -4254,7 +4254,7 @@ sub copy_external_genomes {
 			$log->info( "Action: file $ti_file not found in modified list:$TI_FULLLIST" );
 			my $fasta_cnt = collect_fasta_print({FILE => $ti_file, TAXID => $ti_from_file, %{$param_href} });
 
-			#insert into ti_fulllist
+			#insert into ti_full_list
 			eval {$sth->execute($ti_from_file, $fasta_cnt); };
 			my $rows = $sth->rows;
 			$log->debug( "Action: table $TI_FULLLIST inserted $rows rows for ti:$ti_from_file" ) unless $@;
@@ -4356,12 +4356,12 @@ sub collect_fasta_print {
 # Returns    : nothing
 # Parameters : ( $param_href )
 # Throws     : croaks for parameters
-# Comments   : it works on ti_fulllist table (doesn't create it)
+# Comments   : it works on ti_full_list table (doesn't create it)
 #            : deletes hybrid genomes
 #            : it deletes genomes that have species and strain genomes in full dataset
 #            : (both nr and existing genomes)
 # See Also   : del_total_genomes() - second step
-#            : run del_total_genomes and copy_external_genomes to recreate ti_fulllist
+#            : run del_total_genomes and copy_external_genomes to recreate ti_full_list
 sub del_species_with_strain {
     my $log = Log::Log4perl::get_logger("main");
     $log->logcroak( 'del_species_with_strain() needs a $param_href' ) unless @_ == 1;
@@ -4369,7 +4369,7 @@ sub del_species_with_strain {
 
     my $DATABASE = $param_href->{DATABASE}    or $log->logcroak('no $DATABASE specified on command line!');
     my %TABLES   = %{ $param_href->{TABLES} } or $log->logcroak('no $TABLES specified on command line!');
-    my $TI_FULLLIST = $TABLES{ti_fulllist};
+    my $TI_FULLLIST = $TABLES{ti_full_list};
 			
 	#get new handle
     my $dbh = dbi_connect($param_href);
@@ -4435,7 +4435,7 @@ sub del_species_with_strain {
 				print Dumper(\%hash_to_print);     #print group before delete
 				$log->trace( "Action: deleting:$spec" );
 
-				#DELETE species from ti_fulllist table (because it is species with strains present)
+				#DELETE species from ti_full_list table (because it is species with strains present)
 				eval { $sth_del->execute($spec); };
 				my $rows_del_spec = $sth_del->mysql_async_result;
 			    $log->debug( "Action: table $TI_FULLLIST deleted $rows_del_spec rows for:{$spec}" ) unless $@;
@@ -4472,7 +4472,7 @@ sub merge_existing_genomes {
 	my $DATABASE = $param_href->{DATABASE} or $log->logcroak( 'no $DATABASE specified on command line!' );
 	my $OUT      = $param_href->{OUT}      or $log->logcroak( 'no $OUT specified on command line!' );
     my %TABLES   = %{ $param_href->{TABLES} } or $log->logcroak('no $TABLES specified on command line!');
-    my $TI_FULLLIST = $TABLES{ti_fulllist};
+    my $TI_FULLLIST = $TABLES{ti_full_list};
 	my $nr_dir   = path(path($OUT)->parent, 'nr_genomes');
 	my $ens_dir  = path(path($OUT)->parent, 'ensembl_all');
 	my $jgi_dir  = path(path($OUT)->parent, 'jgi');
@@ -4482,6 +4482,41 @@ sub merge_existing_genomes {
 	#get new handle
     my $dbh = dbi_connect($param_href);
 
+	#check if genomes larger than 30_000 seq and offer to delete from ti_full_list table
+    my $sel_large = qq{
+	SELECT ti, genes_cnt, species_name, source
+	FROM $TI_FULLLIST
+	WHERE genes_cnt >= 30000
+	};
+	my %ti_large = map { $_->[0], [ $_->[1], $_->[2], $_->[3] ] } @{ $dbh->selectall_arrayref($sel_large) };
+    my $cnt_pairs = keys %ti_large;
+    $log->info("Report: Found $cnt_pairs ti->[genes_cnt-species_name-source] pairs");
+
+	#prepare delete query for large genomes
+	my $del_q = qq{
+	DELETE ti FROM $TI_FULLLIST AS ti
+	WHERE ti = ?
+	};
+	my $sth_del = $dbh->prepare($del_q);
+
+    while ( my ( $ti, $species_ref ) = each %ti_large ) {
+        my $genes_cnt    = $species_ref->[0];
+        my $species_name = $species_ref->[1];
+        my $source       = $species_ref->[2];
+		my $decision = prompt "Do you want to delete species:{$species_name} with->$genes_cnt genes from:$source?",
+		               -yn,
+					   -single;
+		if ($decision eq 'y') {
+			eval {$sth_del->execute($ti); };
+			$log->error("Action: delete failed for species:$species_name") if $@;
+			$log->debug("Action: deleted species:{$species_name} from $source with $genes_cnt from $TI_FULLLIST") unless $@;
+		}
+        else {
+            $log->trace("Action: species:{$species_name} from $source with $genes_cnt left in $TI_FULLLIST");
+        }
+    }
+
+	#work on all other sequences
 	#get all tax_ids in TI_FULLLIST
     my $tis_query = qq{
     SELECT ti
@@ -4536,7 +4571,7 @@ sub merge_existing_genomes {
 			$genome_cnt++;
 		}
 		else {
-			$log->warn( "Action: file $genome not found in ti_fulllist:$TI_FULLLIST" );
+			$log->warn( "Action: file $genome not found in ti_full_list:$TI_FULLLIST" );
 		}
 	}
 
@@ -5252,9 +5287,9 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
 
  perl ./lib/CollectGenomes.pm --mode=del_total_genomes -tbl nr_cnt=nr_ti_gi_fasta_InnoDB_cnt -tbl ti_files=ti_files -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -en=InnoDB
 
- perl ./lib/CollectGenomes.pm --mode=print_nr_genomes -tbl ti_fulllist=ti_fulllist -tbl nr_ti_fasta=nr_ti_gi_fasta_InnoDB -o ./t/nr -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ perl ./lib/CollectGenomes.pm --mode=print_nr_genomes -tbl ti_full_list=ti_full_list -tbl nr_ti_fasta=nr_ti_gi_fasta_InnoDB -o ./t/nr -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
- perl ./lib/CollectGenomes.pm --mode=merge_existing_genomes -tbl ti_fulllist=ti_fulllist --out=./t/nr -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ perl ./lib/CollectGenomes.pm --mode=merge_existing_genomes -tbl ti_full_list=ti_full_list --out=./t/nr -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
  Part VII -> download genomes from JGI: (not working)
 
@@ -5437,25 +5472,25 @@ For help write:
  #imports nr and existing genomes
  #Action: import inserted 6096 rows!
  #Action: import inserted 21163 rows!
- #Action: deleted 2 hybrid species from ti_fulllist
- #Report: found 26265 genomes in table:ti_fulllist
+ #Action: deleted 2 hybrid species from ti_full_list
+ #Report: found 26265 genomes in table:ti_full_list
  
  #extract nr genomes after filtering
- perl ./lib/CollectGenomes.pm --mode=print_nr_genomes -tbl ti_fulllist=ti_fulllist -tbl nr_ti_fasta=nr_ti_gi_fasta_TokuDB -o /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_genomes/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ perl ./lib/CollectGenomes.pm --mode=print_nr_genomes -tbl ti_full_list=ti_full_list -tbl nr_ti_fasta=nr_ti_gi_fasta_TokuDB -o /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_genomes/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
  #printed 5195 genomes
 
  #copy genomes from previous database not in this one
- perl ./lib/CollectGenomes.pm --mode=copy_external_genomes -tbl ti_fulllist=ti_fulllist -tbl names=names_raw_2015_9_3_new --in=/home/msestak/dropbox/Databases/db_29_07_15/data/eukarya --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/external/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ perl ./lib/CollectGenomes.pm --mode=copy_external_genomes -tbl ti_full_list=ti_full_list -tbl names=names_raw_2015_9_3_new --in=/home/msestak/dropbox/Databases/db_29_07_15/data/eukarya --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/external/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
  #254 genomes inserted
 
  #delete duplicates from final database
- perl ./lib/CollectGenomes.pm --mode=del_species_with_strain -tbl ti_fulllist=ti_fulllist -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
- #Action: deleted 1 hybrid species from ti_fulllist
+ perl ./lib/CollectGenomes.pm --mode=del_species_with_strain -tbl ti_full_list=ti_full_list -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ #Action: deleted 1 hybrid species from ti_full_list
  #10 genomes deleted
- #Report: found 26508 genomes in table:ti_fulllist
+ #Report: found 26508 genomes in table:ti_full_list
 
  #merge all genomes to all:
- perl ./lib/CollectGenomes.pm --mode=merge_existing_genomes -o /home/msestak/dropbox/Databases/db_02_09_2015/data/all/ -tbl ti_fulllist=ti_fulllist -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ perl ./lib/CollectGenomes.pm --mode=merge_existing_genomes -o /home/msestak/dropbox/Databases/db_02_09_2015/data/all/ -tbl ti_full_list=ti_full_list -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
  #Copied 26465 genomes to /home/msestak/dropbox/Databases/db_02_09_2015/data/all (43 GB)
 
  ### Part VIII -> prepare and run cd-hit
@@ -5561,17 +5596,17 @@ For help write:
  #deletes hybrid genomes
  #Action: import inserted 5928 rows!
  #Action: import inserted 21163 rows!
- #Action: deleted 2 hybrid species from ti_fulllist
- #Report: found 25063 genomes in table:ti_fulllist
+ #Action: deleted 2 hybrid species from ti_full_list
+ #Report: found 25063 genomes in table:ti_full_list
 
  #extract nr genomes after filtering
- perl ./lib/CollectGenomes.pm --mode=print_nr_genomes -tbl ti_fulllist=ti_fulllist -tbl nr_ti_fasta=nr_ti_gi_fasta_Deep -o /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_genomes/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5626 -s /tmp/mysql_sandbox5626.sock
+ perl ./lib/CollectGenomes.pm --mode=print_nr_genomes -tbl ti_full_list=ti_full_list -tbl nr_ti_fasta=nr_ti_gi_fasta_Deep -o /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_genomes/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5626 -s /tmp/mysql_sandbox5626.sock
 
 
 
 
- perl ./lib/CollectGenomes.pm --mode=copy_external_genomes -tbl ti_fulllist=ti_fulllist -tbl names=names_raw_2015_9_3_new --in=/home/msestak/dropbox/Databases/db_29_07_15/data/eukarya --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/external/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
- perl ./lib/CollectGenomes.pm --mode=del_species_with_strain -tbl ti_fulllist=ti_fulllist -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ perl ./lib/CollectGenomes.pm --mode=copy_external_genomes -tbl ti_full_list=ti_full_list -tbl names=names_raw_2015_9_3_new --in=/home/msestak/dropbox/Databases/db_29_07_15/data/eukarya --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/external/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ perl ./lib/CollectGenomes.pm --mode=del_species_with_strain -tbl ti_full_list=ti_full_list -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
 
 =head1 LICENSE
