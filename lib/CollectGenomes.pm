@@ -4638,6 +4638,8 @@ sub jgi_download {
 	url VARCHAR(200) NOT NULL,
 	ti INT UNSIGNED NULL,
 	species_name VARCHAR(200),
+	genes_cnt INT UNSIGNED NULL,
+	source VARCHAR(10) NULL DEFAULT 'JGI',
     PRIMARY KEY(id),
     KEY(ti),
 	KEY(filename),
@@ -4752,6 +4754,9 @@ sub set_gold_table {
 
 	#process GOLD file (strange ending)
 	my $gold_file_out = path($OUT, 'goldData.tsv');
+	if (-f $gold_file_out) {
+		unlink $gold_file_out and $log->warn("Action: perl GOLD file $gold_file_out unlinked");
+	}
 	{
 		local $/ = "\t\n";
 		open my $gold_in_fh, "<", $gold_file  or $log->logdie(qq|Report: Can't open GOLD file $gold_file:$!|);
@@ -4783,24 +4788,24 @@ sub set_gold_table {
 	project_name VARCHAR(200) NULL,
 	ncbi_project_name VARCHAR(500) NULL,
 	ncbi_project_id INT UNSIGNED NULL,
-	project_type VARCHAR(50) NOT NULL,
+	project_type VARCHAR(50) NULL,
 	project_status VARCHAR(50) NULL,
 	sequencing_status VARCHAR(20) NULL,
 	sequencing_centers VARCHAR(500) NULL,
 	funding VARCHAR(2200) NULL,
 	contact_name VARCHAR(40) NULL,
 	ti INT UNSIGNED NOT NULL,
-	domain VARCHAR(20) NOT NULL,
-	kingdom VARCHAR(20) NOT NULL,
-	phylum VARCHAR(50) NOT NULL,
-	class VARCHAR(50) NOT NULL,
-	spec_order VARCHAR(50) NOT NULL,
-	family VARCHAR(50) NOT NULL,
-	genus VARCHAR(50) NOT NULL,
-	species VARCHAR(200) NOT NULL,
+	domain VARCHAR(20) NULL,
+	kingdom VARCHAR(20) NULL,
+	phylum VARCHAR(50) NULL,
+	class VARCHAR(50) NULL,
+	spec_order VARCHAR(50) NULL,
+	family VARCHAR(50) NULL,
+	genus VARCHAR(50) NULL,
+	species_name VARCHAR(200) NOT NULL,
 	PRIMARY KEY(goldstamp),
 	KEY(ti),
-	KEY(species),
+	KEY(species_name),
 	KEY(project_type)
     )ENGINE=$ENGINE CHARACTER SET=ascii };
     create_table( { TABLE_NAME => $gold_tbl, DBH => $dbh, QUERY => $create_q, %{$param_href} } );
@@ -4817,7 +4822,31 @@ sub set_gold_table {
     $log->debug( "Action: $gold_tbl loaded with $rows_l rows!" ) unless $@;
     $log->error( "Action: loading $gold_tbl failed: $@" ) if $@;
 
+    #update with missed species
+    my %to_update = (
+        1670617 => 'Kalanchoe_laxiflora',
+        436017  => 'Ostreococcus_lucimarinus_CCE9901',
+        296587  => 'Micromonas_sp._RCC299',
+        564608  => 'Micromonas_pusilla_CCMP1545',
+        4155    => 'Erythranthe_guttata',
+		4155    => 'Mimulus_guttatus',
+        574566  => 'Coccomyxa_subellipsoidea_C-169',
+        264402  => 'Capsella_grandiflora',
+        3711    => 'Brassica_rapa',
+    );
 
+	my $ins_q = qq{
+	INSERT INTO $gold_tbl (goldstamp, ti, species_name)
+	VALUES (?, ?, ?)
+	};
+	my $sth_ins = $dbh->prepare($ins_q);
+	
+	my $goldstamp = 0;
+	while (my ($ti, $species) = each %to_update) {
+		$goldstamp++;
+		$sth_ins->execute($goldstamp, $ti, $species);
+		$log->trace("Action: inserted species:{$species} to $gold_tbl");
+	}
 
     $dbh->disconnect;
     return;
@@ -5024,7 +5053,8 @@ sub get_jgi_genome {
 
     my $OUT         = $param_href->{OUT}         or $log->logcroak('no $OUT specified on command line!');
     my $DATABASE    = $param_href->{DATABASE}    or $log->logcroak('no $DATABASE specified on command line!');
-    my $NAMES       = $param_href->{NAMES}       or $log->logcroak('no $NAMES specified on command line!');
+    my %TABLES      = %{ $param_href->{TABLES} };
+    my $GOLD_TBL    = $TABLES{gold};
     my $LABEL       = $param_href->{LABEL}       or $log->logcroak('no $LABEL specified in sub!');
     my $FILENAME    = $param_href->{FILENAME}    or $log->logcroak('no $FILENAME specified in sub!');
     my $SIZE        = $param_href->{SIZE}        or $log->logcroak('no $SIZE specified in sub!');
@@ -5041,16 +5071,16 @@ sub get_jgi_genome {
 	my ($first_letter, $rest) = $FILENAME =~ m{\A(.)([^_]+).+\z};
 	my $species_pattern = $first_letter . '%' . $rest;
 	my $get_species_name = qq{
-	SELECT species_name
-	FROM $NAMES
+	SELECT DISTINCT species_name
+	FROM $GOLD_TBL
 	WHERE species_name LIKE '$species_pattern'
 	};
 	my @species = map { $_->[0] } @{ $dbh->selectall_arrayref($get_species_name) };
 
 	#retrieve ti by species_name
 	my $get_ti = qq{
-	SELECT ti
-	FROM $NAMES
+	SELECT DISTINCT ti
+	FROM $GOLD_TBL
 	WHERE species_name = ?
 	};
 	my $sth = $dbh->prepare($get_ti);
@@ -5162,6 +5192,14 @@ sub curl_genomes {
     my $cnt_species_pairs = keys %ti_species;
     $log->info("Report: Found $cnt_species_pairs ti->[species_name-url-filename] pairs");
 
+	#insert into jgi_download $fasta_cnt
+	my $upd_q = qq{
+	UPDATE jgi_download
+	SET genes_cnt = ?
+	WHERE ti = ?
+	};
+	my $sth_up = $dbh->prepare($upd_q);
+
   SPECIES:
     while ( my ( $ti, $species_ref ) = each %ti_species ) {
         my $species_name = $species_ref->[0];
@@ -5174,6 +5212,27 @@ sub curl_genomes {
         my ( $stdout, $stderr, $exit ) = capture_output( $cmd, $param_href );
         if ( $exit == 0 ) {
             $log->debug("Action: species: $species_name from JGI saved at $gzip");
+
+			my $ae = Archive::Extract->new( archive => "$gzip" );
+			my $ae_path;
+			my $ok = do {
+				$ae->extract(to => $jgi_out) or $log->logdie( $ae->error );
+				my $ae_file = $ae->files->[0];
+				$ae_path = path($jgi_out, $ae_file);
+				$log->info( "Action: extracted to $ae_path" );
+			};
+			#delete gziped file
+			unlink $gzip and $log->trace( qq|Action: unlinked $gzip| );
+
+			#save genome under ti and count fasta records
+			$param_href->{OUT} = $jgi_out;
+			my $fasta_cnt = collect_fasta_print({FILE => $ae_path, TAXID => $ti, %{$param_href}});
+
+			#insert fasta count into jgi_download table
+			eval { $sth_up->execute($fasta_cnt, $ti); };
+			my $rows_up = $sth_up->rows;
+			$log->error("Action: failed update to table:jgi_download for:{$species_name}") if $@;
+			$log->debug("Action: table jgi_download updated $rows_up row(s) for:{$species_name}") unless $@;
         }
         else {
             $log->error("Action: failed to save $gzip from JGI:\n$stderr");
