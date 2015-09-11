@@ -4722,10 +4722,10 @@ sub prepare_cdhit_per_phylostrata {
     $log->debug(qq|Report: $ps_num phylostrata:{@ps_columns}|);
 
 	#make a backup copy of PHYLO table
-	#my $ph_copy = create_table_copy( { ORIG => $PHYLO, %{$param_href} } );
+	my $ph_copy = create_table_copy( { ORIG => $PHYLO, %{$param_href} } );
 
 	#create copy of copy of $ORIG table (just in case)
-	#my $ph_backup = create_table_copy( { ORIG => $PHYLO, TO => "${PHYLO}_backup", %{$param_href} } );
+	my $ph_backup = create_table_copy( { ORIG => $PHYLO, TO => "${PHYLO}_backup", %{$param_href} } );
 
     #collect all genomes from $IN
     my @ti_files = File::Find::Rule->file()->name(qr/\A\d+\z/)->in($IN);
@@ -4802,39 +4802,45 @@ sub prepare_cdhit_per_phylostrata {
 
 	#run cleanup of $PHYLO table for all phylostrata that have no genomes
 	my @fa_files = File::Find::Rule->file()->name(qr/\Aps\d+\.fa\z/)->in($OUT);
-	$log->trace("FA_FILES:@fa_files");
+	#$log->trace("FA_FILES:@fa_files");
 	my @ps_names = map { path($_)->basename } @fa_files;
 	@ps_names = map { /(\Aps\d+)/ } @ps_names;
 	@ps_names = sort @ps_names;
 	$log->trace("PS_NAMES:@ps_names");
-	my %ps_
+	my %ps_na = map {$_ => undef} @ps_names;
 
-	say "PS_COLUMNS:@ps_columns";
+	#say "PS_COLUMNS:@ps_columns";
+	my %ps_col = map {$_ => undef} @ps_columns;
 	my @drop_ps;
-	say "DROP_PS:@drop_ps";
+	foreach my $ps_col (sort keys %ps_col) {
+		if (! exists $ps_na{$ps_col}) {
+			push @drop_ps, $ps_col;
+		}
+	}
+	#say "DROP_PS:@drop_ps";
 	my $droplist = join ", ", map { "DROP COLUMN $_" } @drop_ps;
-	$log->trace( "DROPLIST:$droplist" );
+	#$log->trace( "DROPLIST:$droplist" );
 
 	my $del_list = join " AND ", map { "$_ IS NULL" } @ps_names;
-	$log->trace("DEL_LIST:$del_list");
+	#$log->trace("DEL_LIST:$del_list");
 
 	my $alter_q = qq{
 	ALTER TABLE $PHYLO $droplist 
 	};
 	$log->trace("$alter_q");
-	#	eval{ $dbh->do($alter_q)};
-	#	$log->error( "Action: altering table $PHYLO failed: $@" ) if $@;
-	#	$log->info( "Action: table $PHYLO altered:{@drop_ps} dropped" ) unless $@;
+	eval{ $dbh->do($alter_q)};
+	$log->error( "Action: altering table $PHYLO failed: $@" ) if $@;
+	$log->info( "Action: table $PHYLO altered:{@drop_ps} dropped" ) unless $@;
 
 	my $del_q = qq{
 	DELETE ph FROM $PHYLO AS ph
 	WHERE $del_list
 	};
 	$log->trace("$del_q");
-	#	my $del_rows;
-	#	eval{ $del_rows = $dbh->do($del_q)};
-	#	$log->error( "Action: deleting table $PHYLO failed: $@" ) if $@;
-	#	$log->trace( "Action: table $PHYLO deleted $del_rows rows" ) unless $@;
+	my $del_rows;
+	eval{ $del_rows = $dbh->do($del_q)};
+	$log->error( "Action: deleting table $PHYLO failed: $@" ) if $@;
+	$log->info( "Action: table $PHYLO deleted $del_rows rows" ) unless $@;
 
     my $rows_left = $dbh->selectrow_array("SELECT COUNT(*) FROM $PHYLO");
     $log->info("Report: table $PHYLO has $rows_left rows");
@@ -4990,8 +4996,8 @@ sub run_cdhit {
 	@cmd_lines = reverse @cmd_lines;   #start from last phylostratum
 
 	foreach my $cmd (@cmd_lines) {
-		chomp;
-		(my $ps = $cmd) =~ m{(ps\d+)}g;
+		chomp $cmd;
+		(my $ps) = $cmd =~ m{(ps\d+)};
 		my ($stdout_cd, $stderr_cd, $exit_cd) = capture_output( $cmd, $param_href );
 			if ($exit_cd == 0) {
 				my @lines = split("\n", $stdout_cd);
@@ -5004,7 +5010,7 @@ sub run_cdhit {
 					$log->error(qq|Report: some sequences skipped because of errors|);
 				}
 
-				$log->trace(qq|Action: cd-hit for $ps with:$input_seqs2 and OUT:$clusters clusters|);
+				$log->trace(qq|Action: cd-hit for $ps finished (INPUT:$input_seqs2 sequences and OUT:$clusters clusters)|);
 
 			}
 			else {
