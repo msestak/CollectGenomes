@@ -4655,9 +4655,9 @@ sub jgi_download {
 	set_gold_table($param_href);
 
 	#download genomes and save them with taxid from gold table
-    download_phytozome($param_href);
+	#download_phytozome($param_href);
 
-    #download_metazome($param_href);
+	#download_metazome($param_href);
     #download_fungi($param_href);
 
     # http://genome.jgi-psf.org/ext-api/downloads/get-directory?organism=fungi
@@ -4836,6 +4836,11 @@ sub set_gold_table {
         264402  => 'Capsella_grandiflora',
 		#3711    => 'Brassica_rapa',
         3711    => 'BrapaFPsc',
+
+		37653   => 'Obimaculoides',
+		6087    => 'Hmagnipapillata',
+		9615    => 'Cfamiliaris',
+
     );
 
 	my $ins_q = qq{
@@ -4862,7 +4867,7 @@ sub set_gold_table {
 # Returns    : nothing
 # Parameters : $param_href
 # Throws     : 
-# Comments   : part of jgi_download mode
+# Comments   : first part of jgi_download mode
 # See Also   : jgi_download()
 sub download_phytozome {
     my $log = Log::Log4perl::get_logger("main");
@@ -4876,6 +4881,70 @@ sub download_phytozome {
     my $dbh = dbi_connect($param_href);
 
 	my $URL = q{http://genome.jgi.doe.gov/ext-api/downloads/get-directory?organism=PhytozomeV10};
+	
+	my ($xml_name, $xml_path) = get_jgi_xml( { URL => $URL, %{$param_href} } );
+
+	my $twig= new XML::Twig(pretty_print => 'indented');
+	$twig->parsefile( $xml_path );			# build the twig
+	
+	my $root= $twig->root;					# get the root of the twig
+	my @folders_upper = $root->children;    # get the folders list
+	
+	UPPER:
+	foreach my $folder_upper (@folders_upper) {
+		my $species_name = $folder_upper->att( 'name' );
+		$log->debug("FOLDER_UPPER-NAME:{$species_name}");
+
+		#skip unwanted divisions and go into early_release folder
+		foreach ($species_name) {
+			when (/global_analysis/) { $log->trace("Action: skipped upper_folder $species_name") and next UPPER; }
+			when (/orthology/) { $log->trace("Action: skipped upper_folder $species_name") and next UPPER; }
+			when (/inParanoid/) { $log->trace("Action: skipped upper_folder $species_name") and next UPPER; }
+			when (/early_release/) {
+				my @early_folders_upper = $folder_upper->children;
+				$log->warn("Action: working in $species_name");
+				foreach my $early_folder_upper (@early_folders_upper) {
+					my $early_species_name = $early_folder_upper->att( 'name' );
+					say "EARLY_FOLDER_UPPER-NAME:{$early_species_name}";
+					
+					#my @early_folders= $early_folder_upper->children;
+					#say "LISTING EARLY_FOLDERS:@early_folders";
+
+					list_xml_folders( {FOLDER => $early_folder_upper, %{$param_href} } );
+				}
+			}
+			when(/.+/) {
+				list_xml_folders( { FOLDER => $folder_upper,  %{$param_href} } );
+			}
+		}
+	
+	}
+
+	#download proteomes using tis from jgi_download table
+	curl_genomes($param_href);
+}
+
+
+### INTERNAL UTILITY ###
+# Usage      : download_metazome( $param_href );
+# Purpose    : downloads genomes from Metazome portion of JGI
+# Returns    : nothing
+# Parameters : $param_href
+# Throws     : 
+# Comments   : second part of jgi_download mode
+# See Also   : jgi_download()
+sub download_metazome {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('download_metazome() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    my $OUT      = $param_href->{OUT}      or $log->logcroak('no $OUT specified on command line!');
+    my $DATABASE = $param_href->{DATABASE} or $log->logcroak('no $DATABASE specified on command line!');
+
+    #get new handle
+    my $dbh = dbi_connect($param_href);
+
+	my $URL = q{http://genome.jgi.doe.gov/ext-api/downloads/get-directory?organism=Metazome};
 	
 	my ($xml_name, $xml_path) = get_jgi_xml( { URL => $URL, %{$param_href} } );
 
@@ -4996,11 +5065,13 @@ sub list_xml_folders {
 
         #real work here
         my @files = $folder->children;
+		#say "FILES:", Dumper(\@files);
+		#say "FILES:@files";
 
         #say "LISTING FILES:@files";
         foreach my $file (@files) {
             my $filename = $file->att('filename');
-            if ( $filename =~ m{protein.fa.gz\z}g ) {
+            if ( ($filename =~ m{protein.fa.gz\z} ) or ($filename =~ m{peptide.fa.gz\z}) ) {   #first for Phytozome, second for Metazome
                 my $label = $file->att('label');
 				#say "label:$label";
 				#say "filename:$filename";
@@ -5212,7 +5283,7 @@ sub curl_genomes {
         my $jgi_out      = path(path($OUT)->parent, 'jgi');
         my $gzip         = path( $jgi_out, $filename )->canonpath;
 
-        my $cmd = qq{curl $url -b $cookie_path -c $cookie_path > $gzip};
+        my $cmd = qq{curl --retry 999 --retry-max-time 0 -C - $url -b $cookie_path -c $cookie_path > $gzip};
         my ( $stdout, $stderr, $exit ) = capture_output( $cmd, $param_href );
         if ( $exit == 0 ) {
             $log->debug("Action: species: $species_name from JGI saved at $gzip");
@@ -5231,7 +5302,12 @@ sub curl_genomes {
 			#save genome under ti and count fasta records
 			$param_href->{OUT} = $jgi_out;
 			my $fasta_cnt = collect_fasta_print({FILE => $ae_path, TAXID => $ti, %{$param_href}});
-
+			unlink $ae_path and $log->trace( qq|Action: unlinked $ae_path| );
+			#say "FASTA_COUNT:$fasta_cnt";
+			if ($fasta_cnt < 100) {
+				$log->error("Error: failed to download $url for $species_name with fasta:{$fasta_cnt}");
+				redo SPECIES;
+			}
 			#insert fasta count into jgi_download table
 			eval { $sth_up->execute($fasta_cnt, $ti); };
 			my $rows_up = $sth_up->rows;
@@ -5548,6 +5624,8 @@ For help write:
 
  perl ./bin/CollectGenomes.pm --mode=run_cdhit --in=/home/msestak/dropbox/Databases/db_29_07_15/data/cdhit/cd_hit_cmds --out=/home/msestak/dropbox/Databases/db_29_07_15/data/cdhit/ -ho localhost -d nr -u msandbox -p msandbox -po 5622 -s /tmp/mysql_sandbox5622.sock -v
 
+ ### Part VII -> download genomes from JGI:
+ perl ./lib/CollectGenomes.pm --mode=jgi_download --names=names_raw_2015_9_3_new -tbl gold=gold_ver5 -o /home/msestak/dropbox/Databases/db_02_09_2015/data/xml/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
 
 
