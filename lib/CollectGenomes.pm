@@ -4639,7 +4639,7 @@ sub jgi_download {
 	ti INT UNSIGNED NULL,
 	species_name VARCHAR(200),
 	genes_cnt INT UNSIGNED NULL,
-	source VARCHAR(10) NULL DEFAULT 'JGI',
+	source VARCHAR(10) DEFAULT 'JGI',
     PRIMARY KEY(id),
     KEY(ti),
 	KEY(filename),
@@ -4816,7 +4816,7 @@ sub set_gold_table {
 	INTO TABLE $gold_tbl
 	IGNORE 1 LINES
 	};
-	say $load_q;
+	$log->trace("Report: GOLD table load:$load_q");
     eval { $dbh->do($load_q, { async => 1 } ) };
 	my $rows_l = $dbh->mysql_async_result;
     $log->debug( "Action: $gold_tbl loaded with $rows_l rows!" ) unless $@;
@@ -4825,14 +4825,17 @@ sub set_gold_table {
     #update with missed species
     my %to_update = (
         1670617 => 'Kalanchoe_laxiflora',
-        436017  => 'Ostreococcus_lucimarinus_CCE9901',
-        296587  => 'Micromonas_sp._RCC299',
-        564608  => 'Micromonas_pusilla_CCMP1545',
-        4155    => 'Erythranthe_guttata',
+		#436017  => 'Ostreococcus_lucimarinus_CCE9901',
+        436017  => 'Olucimarinus',
+		296587  => 'MpusillaRCC299',
+		#564608  => 'Micromonas_pusilla_CCMP1545',
+        564608  => 'MpusillaCCMP1545',
 		4155    => 'Mimulus_guttatus',
-        574566  => 'Coccomyxa_subellipsoidea_C-169',
+		#574566  => 'Coccomyxa_subellipsoidea_C-169',
+        574566  => 'CsubellipsoideaC169',
         264402  => 'Capsella_grandiflora',
-        3711    => 'Brassica_rapa',
+		#3711    => 'Brassica_rapa',
+        3711    => 'BrapaFPsc',
     );
 
 	my $ins_q = qq{
@@ -5075,6 +5078,7 @@ sub get_jgi_genome {
 	FROM $GOLD_TBL
 	WHERE species_name LIKE '$species_pattern'
 	};
+	say $get_species_name;
 	my @species = map { $_->[0] } @{ $dbh->selectall_arrayref($get_species_name) };
 
 	#retrieve ti by species_name
