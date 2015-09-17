@@ -4656,10 +4656,13 @@ sub jgi_download {
 
 	#download genomes and save them with taxid from gold table
 	download_phytozome($param_href);
+	sleep 5;
 
 	download_metazome($param_href);
+	sleep 5;
 	
 	download_fungi($param_href);
+	sleep 5;
 
     # http://genome.jgi-psf.org/ext-api/downloads/get-directory?organism=fungi
     # http://genome.jgi.doe.gov/ext-api/downloads/get-directory?organism=Metazome
@@ -4877,6 +4880,7 @@ sub download_phytozome {
     my $log = Log::Log4perl::get_logger("main");
     $log->logcroak('download_phytozome() needs a $param_href') unless @_ == 1;
     my ($param_href) = @_;
+	no warnings 'uninitialized';
 
     my $OUT      = $param_href->{OUT}      or $log->logcroak('no $OUT specified on command line!');
     my $DATABASE = $param_href->{DATABASE} or $log->logcroak('no $DATABASE specified on command line!');
@@ -4899,30 +4903,52 @@ sub download_phytozome {
 		my $species_name = $folder_upper->att( 'name' );
 		$log->debug("FOLDER_UPPER-NAME:{$species_name}");
 
-		#skip unwanted divisions and go into early_release folder
+		#skip unwanted divisions and go into {early_release} folder
 		foreach ($species_name) {
-			when (/global_analysis/) { $log->trace("Action: skipped upper_folder $species_name") and next UPPER; }
-			when (/orthology/) { $log->trace("Action: skipped upper_folder $species_name") and next UPPER; }
-			when (/inParanoid/) { $log->trace("Action: skipped upper_folder $species_name") and next UPPER; }
+			when (/global_analysis/) { $log->trace("Action: skipped upper_folder:$species_name") and next UPPER; }
+			when (/orthology/) { $log->trace("Action: skipped upper_folder:$species_name") and next UPPER; }
+			when (/inParanoid/) { $log->trace("Action: skipped upper_folder:$species_name") and next UPPER; }
 			when (/early_release/) {
-				my @early_folders_upper = $folder_upper->children;
 				$log->warn("Action: working in $species_name");
-				foreach my $early_folder_upper (@early_folders_upper) {
-					my $early_species_name = $early_folder_upper->att( 'name' );
-					say "EARLY_FOLDER_UPPER-NAME:{$early_species_name}";
-					
-					#my @early_folders= $early_folder_upper->children;
-					#say "LISTING EARLY_FOLDERS:@early_folders";
+            	my @early_folders = $folder_upper->children;
 
-					list_xml_folders( {FOLDER => $early_folder_upper, %{$param_href} } );
-				}
-			}
+				EARLY:
+				foreach my $early_folder (@early_folders) {
+					my $early_name = $early_folder->att('name');
+    			    $log->warn("Action: working in $early_name");
+					#now working with species folders
+					my @sp_folders = $early_folder->children;
+
+					EARLY_SPECIES:
+					foreach my $sp_folder (@sp_folders) {
+						my $sp_name = $sp_folder->att('name');
+
+						#skip unwanted divisions and go into {annotation} folder
+						if ($sp_name =~ /annotation/) {
+							list_xml_folders( { FOLDER => $early_folder, %{$param_href} } );
+						}
+					}   #end EARLY_SPECIES
+				}   #end EARLY
+			}   #end early_release
+
 			when(/.+/) {
-				list_xml_folders( { FOLDER => $folder_upper,  %{$param_href} } );
-			}
+				$log->warn("Action: working in $species_name");
+            	my @species_folders = $folder_upper->children;
+
+				SPECIES:
+				foreach my $species_folder (@species_folders) {
+					my $real_name = $species_folder->att('name');
+
+					#skip unwanted divisions and go into {Annotation} folder
+    			    if ($real_name =~ /annotation/) {
+    			        $log->warn("Action: working in $real_name");
+						list_xml_folders( { FOLDER => $species_folder, %{$param_href} } );
+					}
+				}
+			}   #end species_folders
 		}
-	
 	}
+
 
 	#download proteomes using tis from jgi_download table
 	curl_genomes($param_href);
@@ -4963,30 +4989,52 @@ sub download_metazome {
 		my $species_name = $folder_upper->att( 'name' );
 		$log->debug("FOLDER_UPPER-NAME:{$species_name}");
 
-		#skip unwanted divisions and go into early_release folder
+		#skip unwanted divisions and go into {early_release} folder
 		foreach ($species_name) {
-			when (/global_analysis/) { $log->trace("Action: skipped upper_folder $species_name") and next UPPER; }
-			when (/orthology/) { $log->trace("Action: skipped upper_folder $species_name") and next UPPER; }
-			when (/inParanoid/) { $log->trace("Action: skipped upper_folder $species_name") and next UPPER; }
+			when (/global_analysis/) { $log->trace("Action: skipped upper_folder:$species_name") and next UPPER; }
+			when (/orthology/) { $log->trace("Action: skipped upper_folder:$species_name") and next UPPER; }
+			when (/inParanoid/) { $log->trace("Action: skipped upper_folder:$species_name") and next UPPER; }
 			when (/early_release/) {
-				my @early_folders_upper = $folder_upper->children;
 				$log->warn("Action: working in $species_name");
-				foreach my $early_folder_upper (@early_folders_upper) {
-					my $early_species_name = $early_folder_upper->att( 'name' );
-					say "EARLY_FOLDER_UPPER-NAME:{$early_species_name}";
-					
-					#my @early_folders= $early_folder_upper->children;
-					#say "LISTING EARLY_FOLDERS:@early_folders";
+            	my @early_folders = $folder_upper->children;
 
-					list_xml_folders( {FOLDER => $early_folder_upper, %{$param_href} } );
-				}
-			}
+				EARLY:
+				foreach my $early_folder (@early_folders) {
+					my $early_name = $early_folder->att('name');
+    			    $log->warn("Action: working in $early_name");
+					#now working with species folders
+					my @sp_folders = $early_folder->children;
+
+					EARLY_SPECIES:
+					foreach my $sp_folder (@sp_folders) {
+						my $sp_name = $sp_folder->att('name');
+
+						#skip unwanted divisions and go into {annotation} folder
+						if ($sp_name =~ /annotation/) {
+							list_xml_folders( { FOLDER => $early_folder, %{$param_href} } );
+						}
+					}   #end EARLY_SPECIES
+				}   #end EARLY
+			}   #end early_release
+
 			when(/.+/) {
-				list_xml_folders( { FOLDER => $folder_upper,  %{$param_href} } );
-			}
+				$log->warn("Action: working in $species_name");
+            	my @species_folders = $folder_upper->children;
+
+				SPECIES:
+				foreach my $species_folder (@species_folders) {
+					my $real_name = $species_folder->att('name');
+
+					#skip unwanted divisions and go into {Annotation} folder
+    			    if ($real_name =~ /annotation/) {
+    			        $log->warn("Action: working in $real_name");
+						list_xml_folders( { FOLDER => $species_folder, %{$param_href} } );
+					}
+				}
+			}   #end species_folders
 		}
-	
 	}
+
 
 	#download proteomes using tis from jgi_download table
 	curl_genomes($param_href);
@@ -5024,33 +5072,55 @@ sub download_fungi {
 
   UPPER:
     foreach my $folder_upper (@folders_upper) {
-        my $species_name = $folder_upper->att('name');
-        $log->debug("FOLDER_UPPER-NAME:{$species_name}");
+        my $folder_name = $folder_upper->att('name');
+        $log->debug("FOLDER_UPPER-NAME:{$folder_name}");
 
-        #skip unwanted divisions and go into early_release folder
-        foreach ($species_name) {
-            when (/global_analysis/) { $log->trace("Action: skipped upper_folder $species_name") and next UPPER; }
-            when (/orthology/)       { $log->trace("Action: skipped upper_folder $species_name") and next UPPER; }
-            when (/inParanoid/)      { $log->trace("Action: skipped upper_folder $species_name") and next UPPER; }
-            when (/early_release/) {
-                my @early_folders_upper = $folder_upper->children;
-                $log->warn("Action: working in $species_name");
-                foreach my $early_folder_upper (@early_folders_upper) {
-                    my $early_species_name = $early_folder_upper->att('name');
-                    say "EARLY_FOLDER_UPPER-NAME:{$early_species_name}";
+        #skip unwanted divisions and go into {Files} folder
+        if ($folder_name =~ /Files/) {
+            $log->warn("Action: working in $folder_name");
+            my @files_folders = $folder_upper->children;
 
-                    #my @early_folders= $early_folder_upper->children;
-                    #say "LISTING EARLY_FOLDERS:@early_folders";
+			FILES:
+			foreach my $files_folder (@files_folders) {
+				my $folder_files_name = $files_folder->att('name');
+				
+				#skip unwanted divisions and go into {Annotation} folder
+				if ($folder_files_name =~ /Annotation/) {
+					$log->warn("Action: working in $folder_files_name");
+					my @annot_folders = $files_folder->children;
 
-                    list_xml_folders( { FOLDER => $early_folder_upper, %{$param_href} } );
-                }
-            }
-            when (/.+/) {
-                list_xml_folders( { FOLDER => $folder_upper, %{$param_href} } );
-            }
-        }
+					ANNOTATION:
+					foreach my $annot_folder (@annot_folders) {
+						my $annot_folder_name = $annot_folder->att('name');
 
-    }
+						#skip unwanted divisions and go into {Filtered Models} folder
+						if ($annot_folder_name =~ /Filtered Models/) {
+							$log->warn("Action: working in $annot_folder_name");
+							my @model_folders = $annot_folder->children;
+
+							MODELS:
+							foreach my $model_folder (@model_folders) {
+								my $model_folder_name = $model_folder->att('name');
+
+								#skip unwanted divisions and go into {Filtered Models} folder
+								if ($model_folder_name =~ /Proteins/) {
+									$log->warn("Action: working in $model_folder_name");
+									list_xml_folders( { FOLDER => $model_folder, %{$param_href} } );
+								}
+							}   #end MODELS
+						}
+					}   #end ANNOTATION
+				}
+			}   #end FILES
+		}
+	}   #end UPPER
+
+
+
+
+
+
+
 
     #download proteomes using tis from jgi_download table
     curl_genomes($param_href);
@@ -5076,19 +5146,23 @@ sub get_jgi_xml {
     ( my $xml_name = $URL ) =~ s{\A(?:.+?)organism=(.+)\z}{$1};
     my $xml_path = path( $OUT, $xml_name . '.xml' )->canonpath;
 
-    my $cmd = qq{curl -C - --retry 999 --retry-max-time 0 $URL -b $cookie_path -c $cookie_path > $xml_path};
-    my ( $stdout, $stderr, $exit ) = capture_output( $cmd, $param_href );
-    if ( $exit == 0 ) {
-        $log->debug("Action: XML $xml_name from JGI saved at $xml_path");
+	CMD: {
+		my $cmd = qq{curl -C - --retry 999 --retry-max-time 0 $URL -b $cookie_path -c $cookie_path > $xml_path};
+		my ( $stdout, $stderr, $exit ) = capture_output( $cmd, $param_href );
+    	if ( $exit == 0 ) {
+    	    $log->debug("Action: XML $xml_name from JGI saved at $xml_path");
 
-        #check for zero size
-        if ( -z $xml_path ) {
-            $log->error("ZERO size: $xml_path");
-        }
-    }
-    else {
-        $log->error("Action: failed to save $xml_name from JGI:\n$stderr");
-    }
+    	    #check for zero size
+    	    if ( -z $xml_path ) {
+    	        $log->error("ZERO size: $xml_path Going to redo!");
+				sleep 1;
+				redo CMD;
+    	    }
+    	}
+    	else {
+    	    $log->error("Action: failed to save $xml_name from JGI:\n$stderr");
+    	}
+	}   #end CMD block
 
     return $xml_name, $xml_path;
 }
@@ -5106,144 +5180,59 @@ sub list_xml_folders {
     my $log = Log::Log4perl::get_logger("main");
     $log->logcroak('list_xml_folders() needs a $folder_upper') unless @_ == 1;
     my ($param_href) = @_;
+	no warnings 'uninitialized';
 
-    my $folder_upper = $param_href->{FOLDER} or $log->logcroak('no $OUT specified on command line!');
+    my $folder = $param_href->{FOLDER} or $log->logcroak('no $OUT specified on command line!');
+    my @files = $folder->children;
 
-    #unwind folders to get to genomes
-    my @folders = $folder_upper->children;
+    #say "FILES:", Dumper(\@files);
+	#say "LISTING FILES:@files";
 
-    #say "LISTING FOLDERS:@folders";
+    foreach my $file (@files) {
+        my $filename = $file->att('filename');
+        if (   ( $filename =~ m{protein.fa.gz\z} )
+            or ( $filename =~ m{peptide.fa.gz\z} )
+            or ( $filename =~ m{aa.fasta.gz\z} ) ) {    #first for Phytozome, second for Metazome, third for fungi
+            my $label = $file->att('label');
 
-  FOLDER:
-    foreach my $folder (@folders) {
-        my $division_name = $folder->att('name');
-        if ( !defined $division_name ) {
-            $log->trace("Action: skipped empty folder") and next FOLDER;
-        }
-        else {
-            say "FOLDER-NAME:{$division_name}";
-        }
+            #say "label:$label";
+            #say "filename:$filename";
+            my $size = $file->att('size');
 
-        #list of divisions to skip
-        my @fungi_annot_folders;
-        foreach ($division_name) {
-            when (/assembly/)         { $log->trace("Action: skipped folder $division_name") and next FOLDER; }
-            when (/Assembly/)         { $log->trace("Action: skipped folder $division_name") and next FOLDER; }
-            when (/diversity/)        { $log->trace("Action: skipped folder $division_name") and next FOLDER; }
-            when (/bam/)              { $log->trace("Action: skipped folder $division_name") and next FOLDER; }
-            when (/expression/)       { $log->trace("Action: skipped folder $division_name") and next FOLDER; }
-            when (/EST/)              { $log->trace("Action: skipped folder $division_name") and next FOLDER; }
-            when (/Additional Files/) { $log->trace("Action: skipped folder $division_name") and next FOLDER; }
-            when (/Annotation/) {
-                $log->trace("Action: entering folder $division_name");
-                @fungi_annot_folders = $folder->children;
-            }    # 3 subdirs (Filtered needed)
-        }
+            #say "size:$size";
+            my $size_in_bytes = $file->att('sizeInBytes');
 
-        #real work here
-      ANNOTATION:
-        foreach my $annot_folder (@fungi_annot_folders) {
-            my $annot_name = $annot_folder->att('name');
-            if ( !defined $annot_name ) {
-                $log->trace("Action: skipped empty folder") and next ANNOTATION;
-            }
-            else {
-                say "FOLDER-NAME:{$annot_name}";
-            }
+            #say "sizeInBytes:$size_in_bytes";
+            my $timestamp = $file->att('timestamp');
 
-            #now working in Annotation -> Filtered Models
-            my @fungi_filtered_folders;
-            foreach ($annot_name) {
-                when (/Mitochondrial annotation/) {
-                    $log->trace("Action: skipped folder $annot_name") and next ANNOTATION;
-                }
-                when (/All models, Filtered and Not/) {
-                    $log->trace("Action: skipped folder $annot_name") and next ANNOTATION;
-                }
-                when (/Filtered Models/) {
-                    $log->trace("Action: entering folder $annot_name");
-                    @fungi_filtered_folders = $annot_folder->children;
-                }    # files are in sub directories
-            }
+            #say "timestamp:$timestamp";
+            my $project = $file->att('project');
+            $project = $label if ( ( $project eq '' ) or ( $project == 0 ) );    #empty or 0 doesn't work
+			#say "project:{$project}";
+            my $md5 = $file->att('md5');
+            $md5 = 'none' if ( ! defined $md5 );    #fungi don't have md5
 
-            #now looking for folder Proteins and there are proteins
-          PROTEINS:
-            foreach my $filtered_folder (@fungi_filtered_folders) {
-                my $filtered_name = $filtered_folder->att('name');
-                if ( !defined $filtered_name ) {
-                    $log->trace("Action: skipped empty folder") and next ANNOTATION;
-                }
-                else {
-                    say "FOLDER-NAME:{$filtered_name}";
-                }
+			#say "md5:$md5";
+            my $url = $file->att('url');
 
-                #now working in Annotation -> Filtered Models -> Proteins
-                foreach ($filtered_name) {
-                    when (/Transcripts/) { $log->trace("Action: skipped folder $filtered_name") and next PROTEINS; }
-                    when (/Transcripts/) { $log->trace("Action: skipped folder $filtered_name") and next PROTEINS; }
-                    when (/Functional Annotations/) {
-                        $log->trace("Action: skipped folder $filtered_name") and next PROTEINS;
-                    }
-                    when (/CDS/) { $log->trace("Action: skipped folder $filtered_name") and next PROTEINS; }
-                }
+            #say "url:$url";
+            $url =~ s{/ext-api(?:.+?)url=(.+)}{$1};
 
-                my @files = $filtered_folder->children;
+            #say $url;
+            $url = 'http://genome.jgi.doe.gov' . $url;
 
-                #say "FILES:", Dumper(\@files);
-                say "FILES:@files";
-
-                #say "LISTING FILES:@files";
-                foreach my $file (@files) {
-                    my $filename = $file->att('filename');
-                    if (   ( $filename =~ m{protein.fa.gz\z} )
-                        or ( $filename =~ m{peptide.fa.gz\z} )
-                        or ( $filename =~ m{aa.fasta.gz\z} ) )
-                    {    #first for Phytozome, second for Metazome, third for fungi
-                        my $label = $file->att('label');
-
-                        #say "label:$label";
-                        #say "filename:$filename";
-                        my $size = $file->att('size');
-
-                        #say "size:$size";
-                        my $size_in_bytes = $file->att('sizeInBytes');
-
-                        #say "sizeInBytes:$size_in_bytes";
-                        my $timestamp = $file->att('timestamp');
-
-                        #say "timestamp:$timestamp";
-                        my $project = $file->att('project');
-                        $project = $label if ( ( $project eq '' ) or ( $project == 0 ) );    #empty or 0 doesn't work
-						#say "project:{$project}";
-                        my $md5 = $file->att('md5');
-                        $md5 = 'none' if ( ! defined $md5 );    #fungi don't have md5
-
-						#say "md5:$md5";
-                        my $url = $file->att('url');
-
-                        #say "url:$url";
-                        $url =~ s{/ext-api(?:.+?)url=(.+)}{$1};
-
-                        #say $url;
-                        $url = 'http://genome.jgi.doe.gov' . $url;
-
-                        #say $url;
-                        get_jgi_genome(
-                            {   LABEL       => $label,
-                                FILENAME    => $filename,
-                                SIZE        => $size,
-                                SIZEINBYTES => $size_in_bytes,
-                                TIMESTAMP   => $timestamp,
-                                PROJECT     => $project,
-                                MD5         => $md5,
-                                URL         => $url,
-                                %{$param_href}
-                            }
-                        );
-                    }
-
-                }
-            }
+            #say $url;
+            get_jgi_genome({
+					LABEL       => $label,
+                    FILENAME    => $filename,
+                    SIZE        => $size,
+                    SIZEINBYTES => $size_in_bytes,
+                    TIMESTAMP   => $timestamp,
+                    PROJECT     => $project,
+                    MD5         => $md5,
+                    URL         => $url,
+                    %{$param_href}
+                });
         }
     }
 }
