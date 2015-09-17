@@ -5154,9 +5154,11 @@ sub get_jgi_xml {
 
     	    #check for zero size
     	    if ( -z $xml_path ) {
-    	        $log->error("ZERO size: $xml_path Going to redo!");
+				state $i = 0;
+				$i++;
+    	        $log->error("ZERO size: $xml_path Going to redo:$i");
 				sleep 1;
-				redo CMD;
+				redo CMD if $i < 101;
     	    }
     	}
     	else {
