@@ -4658,7 +4658,7 @@ sub jgi_download {
 	#download_phytozome($param_href);
 
 	#download_metazome($param_href);
-    #download_fungi($param_href);
+    download_fungi($param_href);
 
     # http://genome.jgi-psf.org/ext-api/downloads/get-directory?organism=fungi
     # http://genome.jgi.doe.gov/ext-api/downloads/get-directory?organism=Metazome
@@ -4990,6 +4990,70 @@ sub download_metazome {
 
 
 ### INTERNAL UTILITY ###
+# Usage      : download_fungi( $param_href );
+# Purpose    : downloads genomes from Metazome portion of JGI
+# Returns    : nothing
+# Parameters : $param_href
+# Throws     : 
+# Comments   : second part of jgi_download mode
+# See Also   : jgi_download()
+sub download_fungi {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('download_fungi() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    my $OUT      = $param_href->{OUT}      or $log->logcroak('no $OUT specified on command line!');
+    my $DATABASE = $param_href->{DATABASE} or $log->logcroak('no $DATABASE specified on command line!');
+
+    #get new handle
+    my $dbh = dbi_connect($param_href);
+
+	my $URL = q{http://genome.jgi-psf.org/ext-api/downloads/get-directory?organism=fungi};
+	
+	my ($xml_name, $xml_path) = get_jgi_xml( { URL => $URL, %{$param_href} } );
+
+	my $twig= new XML::Twig(pretty_print => 'indented');
+	$twig->parsefile( $xml_path );			# build the twig
+	
+	my $root= $twig->root;					# get the root of the twig
+	my @folders_upper = $root->children;    # get the folders list
+	
+	UPPER:
+	foreach my $folder_upper (@folders_upper) {
+		my $species_name = $folder_upper->att( 'name' );
+		$log->debug("FOLDER_UPPER-NAME:{$species_name}");
+
+		#skip unwanted divisions and go into early_release folder
+		foreach ($species_name) {
+			when (/global_analysis/) { $log->trace("Action: skipped upper_folder $species_name") and next UPPER; }
+			when (/orthology/) { $log->trace("Action: skipped upper_folder $species_name") and next UPPER; }
+			when (/inParanoid/) { $log->trace("Action: skipped upper_folder $species_name") and next UPPER; }
+			when (/early_release/) {
+				my @early_folders_upper = $folder_upper->children;
+				$log->warn("Action: working in $species_name");
+				foreach my $early_folder_upper (@early_folders_upper) {
+					my $early_species_name = $early_folder_upper->att( 'name' );
+					say "EARLY_FOLDER_UPPER-NAME:{$early_species_name}";
+					
+					#my @early_folders= $early_folder_upper->children;
+					#say "LISTING EARLY_FOLDERS:@early_folders";
+
+					list_xml_folders( {FOLDER => $early_folder_upper, %{$param_href} } );
+				}
+			}
+			when(/.+/) {
+				list_xml_folders( { FOLDER => $folder_upper,  %{$param_href} } );
+			}
+		}
+	
+	}
+
+	#download proteomes using tis from jgi_download table
+	curl_genomes($param_href);
+}
+
+
+### INTERNAL UTILITY ###
 # Usage      : get_jgi_xml( $param_href );
 # Purpose    : downloads xml file with locations of JGI genomes
 # Returns    : $xml_name, $xml_path
@@ -5052,61 +5116,109 @@ sub list_xml_folders {
 			$log->trace("Action: skipped empty folder") and next FOLDER;
 		}
 		else {
-			#say "FOLDER-NAME:{$division_name}";
+			say "FOLDER-NAME:{$division_name}";
 		}
 
 		#list of divisions to skip
+		my @fungi_annot_folders;
 		foreach ($division_name) {
 			when (/assembly/) { $log->trace("Action: skipped folder $division_name") and next FOLDER; }
+			when (/Assembly/) { $log->trace("Action: skipped folder $division_name") and next FOLDER; }
 			when (/diversity/) { $log->trace("Action: skipped folder $division_name") and next FOLDER; }
 			when (/bam/) { $log->trace("Action: skipped folder $division_name") and next FOLDER; }
 			when (/expression/) { $log->trace("Action: skipped folder $division_name") and next FOLDER; }
+			when (/EST/) { $log->trace("Action: skipped folder $division_name") and next FOLDER; }
+			when (/Additional Files/) { $log->trace("Action: skipped folder $division_name") and next FOLDER; }
+			when (/Annotation/) { $log->trace("Action: entering folder $division_name"); 
+				@fungi_annot_folders= $folder->children;}   # 3 subdirs (Filtered needed)
 		}
 
         #real work here
-        my @files = $folder->children;
-		#say "FILES:", Dumper(\@files);
-		#say "FILES:@files";
+		ANNOTATION:
+		foreach my $annot_folder (@fungi_annot_folders) {
+			my $annot_name = $annot_folder->att( 'name' );
+			if (! defined $annot_name) {
+				$log->trace("Action: skipped empty folder") and next ANNOTATION;
+			}
+			else {
+				say "FOLDER-NAME:{$annot_name}";
+			}
 
-        #say "LISTING FILES:@files";
-        foreach my $file (@files) {
-            my $filename = $file->att('filename');
-            if ( ($filename =~ m{protein.fa.gz\z} ) or ($filename =~ m{peptide.fa.gz\z}) ) {   #first for Phytozome, second for Metazome
-                my $label = $file->att('label');
-				#say "label:$label";
-				#say "filename:$filename";
-                my $size = $file->att('size');
-				#say "size:$size";
-                my $size_in_bytes = $file->att('sizeInBytes');
-				#say "sizeInBytes:$size_in_bytes";
-                my $timestamp = $file->att('timestamp');
-				#say "timestamp:$timestamp";
-                my $project = $file->att('project');
-				$project = $label if $project eq '';
-				#say "project:$project";
-                my $md5 = $file->att('md5');
-				#say "md5:$md5";
-                my $url = $file->att('url');
-				#say "url:$url";
-                $url =~ s{/ext-api(?:.+?)url=(.+)}{$1};
-				#say $url;
-                $url = 'http://genome.jgi.doe.gov' . $url;
-				#say $url;
-                get_jgi_genome(
-                    {   LABEL       => $label,
-                        FILENAME    => $filename,
-                        SIZE        => $size,
-                        SIZEINBYTES => $size_in_bytes,
-                        TIMESTAMP   => $timestamp,
-                        PROJECT     => $project,
-						MD5         => $md5,
-                        URL         => $url,
-                        %{$param_href}
-                    }
-                );
-            }
+			#now working in Annotation -> Filtered Models
+			my @fungi_filtered_folders;
+			foreach ($annot_name) {
+				when (/Mitochondrial annotation/) { $log->trace("Action: skipped folder $annot_name") and next ANNOTATION; }
+				when (/All models, Filtered and Not/) { $log->trace("Action: skipped folder $annot_name") and next ANNOTATION; }
+				when (/Filtered Models/) { $log->trace("Action: entering folder $annot_name"); 
+					@fungi_filtered_folders = $annot_folder->children; }   # files are in sub directories
+			}
 
-        }
+			#now looking for folder Proteins and there are proteins
+			PROTEINS:
+			foreach my $filtered_folder (@fungi_filtered_folders) {
+				my $filtered_name = $filtered_folder->att( 'name' );
+				if (! defined $filtered_name) {
+					$log->trace("Action: skipped empty folder") and next ANNOTATION;
+				}
+				else {
+					say "FOLDER-NAME:{$filtered_name}";
+				}
+	
+				#now working in Annotation -> Filtered Models -> Proteins
+				foreach ($filtered_name) {
+					when (/Transcripts/) { $log->trace("Action: skipped folder $filtered_name") and next PROTEINS; }
+					when (/Transcripts/) { $log->trace("Action: skipped folder $filtered_name") and next PROTEINS; }
+					when (/Functional Annotations/) { $log->trace("Action: skipped folder $filtered_name") and next PROTEINS; }
+					when (/CDS/) { $log->trace("Action: skipped folder $filtered_name") and next PROTEINS; }
+				}
+
+
+
+				my @files = $filtered_folder->children;
+				#say "FILES:", Dumper(\@files);
+				say "FILES:@files";
+
+        		#say "LISTING FILES:@files";
+        		foreach my $file (@files) {
+        		    my $filename = $file->att('filename');
+        		    if ( ($filename =~ m{protein.fa.gz\z} ) or ($filename =~ m{peptide.fa.gz\z}) or ($filename =~ m{aa.fasta.gz\z} ) ) {   #first for Phytozome, second for Metazome, third for fungi
+        		        my $label = $file->att('label');
+						#say "label:$label";
+						#say "filename:$filename";
+        		        my $size = $file->att('size');
+						#say "size:$size";
+        		        my $size_in_bytes = $file->att('sizeInBytes');
+						#say "sizeInBytes:$size_in_bytes";
+        		        my $timestamp = $file->att('timestamp');
+						#say "timestamp:$timestamp";
+        		        my $project = $file->att('project');
+						$project = $label if $project eq '';
+						say "project:{$project}";
+        		        my $md5 = $file->att('md5');
+						#say "md5:$md5";
+        		        my $url = $file->att('url');
+						#say "url:$url";
+        		        $url =~ s{/ext-api(?:.+?)url=(.+)}{$1};
+						#say $url;
+        		        $url = 'http://genome.jgi.doe.gov' . $url;
+						#say $url;
+        		        get_jgi_genome(
+        		            {   LABEL       => $label,
+        		                FILENAME    => $filename,
+        		                SIZE        => $size,
+        		                SIZEINBYTES => $size_in_bytes,
+        		                TIMESTAMP   => $timestamp,
+        		                PROJECT     => $project,
+								MD5         => $md5,
+        		                URL         => $url,
+        		                %{$param_href}
+        		            }
+        		        );
+        		    }
+
+        		}
+			}
+		}
 	}
 }
 
