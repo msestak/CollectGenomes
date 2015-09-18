@@ -4606,7 +4606,7 @@ sub get_ensembl_genomes {
     my @sorted_files =
 	    map { $_->[0] }                    #return full filename (aref position 0)
 	    sort { $a->[2] <=> $b->[2] }       #sort by num (ref position 2)
-        map { [ $_, /\A(\D*)(\d+)\z/ ] }   #aref with [file, basename, num]
+        map { [ $_, /\A(.+)(\d+)\z/ ] }   #aref with [file, basename, num]
         @ti_files;
 	#say "SORTED:", Dumper(\@sorted_files);
 
@@ -4670,7 +4670,7 @@ sub get_ensembl_genomes {
 		eval {$sth_ins->execute($ti, $fasta_cnt, $species_name, 'Ensembl'); };
 		my $rows_ins = $sth_ins->rows;
 		$log->error("Action: failed insert to table $table_ti") if $@;
-		$log->debug("Action: table $table_ti inserted $rows_ins rows") unless $@;
+		$log->debug("Action: table $table_ti inserted for species:{$species_name} $rows_ins rows") unless $@;
 	}
 
 	#species with changed tax_ids
@@ -5813,6 +5813,10 @@ For help write:
  ### Part III -> load nr into database:
  # Step1: load gi_taxid_prot to connect gi from nr and ti from gi_taxid_prot
  perl ./lib/CollectGenomes.pm --mode=gi_taxid -if /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/gi_taxid_prot.dmp.gz -o ./t/nr/ -ho localhost -u msandbox -p msandbox -d nr_2015_9_2 --port=5625 --socket=/tmp/mysql_sandbox5625.sock --engine=TokuDB
+ #File /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/gi_taxid_prot.dmp.gz has 223469419 lines!
+ #File /home/msestak/gitdir/CollectGenomes/t/nr/gi_taxid_prot_TokuDB written with 223469419 lines!
+ #Report: import inserted 223469419 rows in 3331 sec (67087 rows/sec)
+ # Step2: load full nr NCBI database
  perl ./lib/CollectGenomes.pm --mode=extract_and_load_nr -if /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/nr.gz -o ./t/nr/ -ho localhost -u msandbox -p msandbox -d nr_2015_9_2 --port=5625 --socket=/tmp/mysql_sandbox5625.sock --engine=TokuDB
  #File /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/nr.gz has 70614921 lines!
  #File /home/msestak/gitdir/CollectGenomes/t/nr/nr_2015_9_3_TokuDB written with 211434339 lines!
