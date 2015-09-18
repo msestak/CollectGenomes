@@ -46,7 +46,7 @@ our @EXPORT_OK = qw{
 	del_virus_from_nr
 	del_missing_ti
 	ti_gi_fasta
-	get_existing_ti
+	get_ensembl_genomes
 	import_names
 	import_raw_names
 	import_raw_nodes
@@ -146,7 +146,7 @@ sub main {
         proc_phylo                    => \&proc_create_phylo,
         call_phylo                    => \&call_proc_phylo,
 		jgi_download                  => \&jgi_download,
-        get_existing_ti               => \&get_existing_ti,
+        get_ensembl_genomes               => \&get_ensembl_genomes,
         nr_genome_counts              => \&nr_genome_counts,
 		export_all_nr_genomes         => \&export_all_nr_genomes,
         get_missing_genomes           => \&get_missing_genomes,
@@ -2803,7 +2803,7 @@ sub get_missing_genomes {
     my $DATABASE     = $param_href->{DATABASE} or $log->logcroak('no $DATABASE specified on command line!');
     my %TABLES       = %{ $param_href->{TABLES} };
     my $NR_CNT_TBL   = $TABLES{nr_cnt};
-    my $TI_FILES_TBL = $TABLES{ti_files};
+    my $TI_FILES_TBL = $TABLES{ensembl_genomes};
 
     #get new handle
     my $dbh = dbi_connect($param_href);
@@ -3109,7 +3109,7 @@ sub del_total_genomes {
     my $DATABASE = $param_href->{DATABASE}    or $log->logcroak('no $DATABASE specified on command line!');
     my %TABLES   = %{ $param_href->{TABLES} } or $log->logcroak('no $TABLES specified on command line!');
     my $NR_CNT_TBL   = $TABLES{nr_cnt};
-    my $TI_FILES_TBL = $TABLES{ti_files};
+    my $TI_FILES_TBL = $TABLES{ensembl_genomes};
 			
 	#get new handle
     my $dbh = dbi_connect($param_href);
@@ -4578,16 +4578,16 @@ sub run_cdhit {
 }
 
 ### INTERFACE SUB ###
-# Usage      : get_existing_ti( $param_href );
+# Usage      : get_ensembl_genomes( $param_href );
 # Purpose    : collects tax_ids from tiktaalik and inserts it as a table in db
 # Returns    : nothing
 # Parameters : ( $param_href )
 # Throws     : croaks for parameters
 # Comments   : 
 # See Also   : 
-sub get_existing_ti {
+sub get_ensembl_genomes {
     my $log = Log::Log4perl::get_logger("main");
-    $log->logcroak( 'get_existing_ti() needs a $param_href' ) unless @_ == 1;
+    $log->logcroak( 'get_ensembl_genomes() needs a $param_href' ) unless @_ == 1;
     my ( $param_href ) = @_;
 
     my $ENGINE = defined $param_href->{ENGINE} ? $param_href->{ENGINE} : 'InnoDB';
@@ -4608,13 +4608,13 @@ sub get_existing_ti {
 	    sort { $a->[2] <=> $b->[2] }       #sort by num (ref position 2)
         map { [ $_, /\A(\D*)(\d+)\z/ ] }   #aref with [file, basename, num]
         @ti_files;
-	say "SORTED:", Dumper(\@sorted_files);
+	#say "SORTED:", Dumper(\@sorted_files);
 
 	#get new database handle
 	my $dbh = dbi_connect($param_href);
 
 	#insert tax_ids into the database
-	my $table_ti = "ti_files";
+	my $table_ti = "ensembl_genomes";
     my $create_q = qq{
     CREATE TABLE $table_ti (
     ti INT UNSIGNED NOT NULL,
@@ -4636,7 +4636,7 @@ sub get_existing_ti {
 	};
 	my $sth_sel = $dbh->prepare($sel_sp);
 
-	#prepare insert ti_files query
+	#prepare insert ensembl_genomes query
 	my $ins_q = qq{
 	INSERT INTO $table_ti (ti, genes_cnt, species_name, source)
 	VALUES( ?, ?, ?, ? )
@@ -4712,7 +4712,7 @@ sub get_existing_ti {
 	}
 
 	#print to file for MakeTree
-	my $ti_files_path = path($OUT, 'ti_files');
+	my $ti_files_path = path($OUT, 'ensembl_genomes');
 	open my $ti_fh, ">:encoding(ASCII)", $ti_files_path or $log->logdie("Error: can't write to $ti_files_path:$!");
 	#select q for all tis
 	my $tis_query = qq{
@@ -4724,7 +4724,7 @@ sub get_existing_ti {
 		say {$ti_fh} $_;
 	}
 
-	#report number of genomes in ti_files table
+	#report number of genomes in ensembl_genomes table
     my $rows_end = $dbh->selectrow_array("SELECT COUNT(*) FROM $table_ti");
     $log->info("Report: table $table_ti has $rows_end rows");
 
@@ -5720,13 +5720,13 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
 
  Part VI -> combine nr genomes with Ensembl genomes and print them out:
 
- perl ./lib/CollectGenomes.pm --mode=get_existing_ti --in=./ensembl_ftp/ --tables names=names_martin7 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -en=InnoDB
+ perl ./lib/CollectGenomes.pm --mode=get_ensembl_genomes --in=./ensembl_ftp/ --tables names=names_martin7 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -en=InnoDB
 
- perl ./lib/CollectGenomes.pm --mode=get_missing_genomes --tables nr_cnt=nr_ti_gi_fasta_InnoDB_cnt -tbl ti_files=ti_files -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=InnoDB
+ perl ./lib/CollectGenomes.pm --mode=get_missing_genomes --tables nr_cnt=nr_ti_gi_fasta_InnoDB_cnt -tbl ensembl_genomes=ensembl_genomes -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=InnoDB
 
  perl ./lib/CollectGenomes.pm --mode=del_nr_genomes -tbl nr_cnt=nr_ti_gi_fasta_InnoDB_cnt -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
- perl ./lib/CollectGenomes.pm --mode=del_total_genomes -tbl nr_cnt=nr_ti_gi_fasta_InnoDB_cnt -tbl ti_files=ti_files -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -en=InnoDB
+ perl ./lib/CollectGenomes.pm --mode=del_total_genomes -tbl nr_cnt=nr_ti_gi_fasta_InnoDB_cnt -tbl ensembl_genomes=ensembl_genomes -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -en=InnoDB
 
  perl ./lib/CollectGenomes.pm --mode=print_nr_genomes -tbl ti_full_list=ti_full_list -tbl nr_ti_fasta=nr_ti_gi_fasta_InnoDB -o ./t/nr -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
@@ -5761,7 +5761,7 @@ Possible modes:
  extract_and_load_nr           => \&extract_and_load_nr,
  gi_taxid                      => \&extract_and_load_gi_taxid,
  ti_gi_fasta                   => \&ti_gi_fasta,
- get_existing_ti               => \&get_existing_ti,
+ get_ensembl_genomes               => \&get_ensembl_genomes,
  import_names                  => \&import_names,
  import_nodes                  => \&import_nodes,
  get_missing_genomes           => \&get_missing_genomes,
@@ -5827,7 +5827,7 @@ For help write:
  #Action: inserted 1124194 rows to nodes:nodes_dmp in 45 sec (24982 rows/s)
  
  # Step2: import tis of Ensembl genomes, count them and get a list of files for MakeTree
- perl ./lib/CollectGenomes.pm --mode=get_existing_ti --in=/home/msestak/dropbox/Databases/db_02_09_2015/data/ensembl_all/ --tables names=names_raw_2015_9_3_new -o /home/msestak/dropbox/Databases/db_02_09_2015/doc/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -en=TokuDB
+ perl ./lib/CollectGenomes.pm --mode=get_ensembl_genomes --in=/home/msestak/dropbox/Databases/db_02_09_2015/data/ensembl_all/ --tables names=names_raw_2015_9_3_new -o /home/msestak/dropbox/Databases/db_02_09_2015/doc/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -en=TokuDB
 
  # Step3: run MakeTree to get modified phylogeny
  [msestak@tiktaalik db_02_09_2015]$ MakeTree -m ./data/nr_raw/names_raw_2015_9_3 -n ./data/nr_raw/nodes_raw_2015_9_3 -i ./doc/update_phylogeny_martin7.tsv -d 3 -s ./doc/ensembl -t 6072 | TreeIlustrator.pl
@@ -5873,9 +5873,9 @@ For help write:
  #Action: update to nr_ti_gi_fasta_TokuDB_cnt updated 455063 rows!
  
  ### Part VI -> combine nr genomes with Ensembl genomes and print them out:
- #deletes genomes from nr_cnt table that are present in ti_files (downloaded from Ensembl)
+ #deletes genomes from nr_cnt table that are present in ensembl_genomes (downloaded from Ensembl)
  #it also deletes genomes smaller than 2000 sequences
- perl ./lib/CollectGenomes.pm --mode=get_missing_genomes --tables nr_cnt=nr_ti_gi_fasta_TokuDB_cnt -tbl ti_files=ti_files -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=TokuDB
+ perl ./lib/CollectGenomes.pm --mode=get_missing_genomes --tables nr_cnt=nr_ti_gi_fasta_TokuDB_cnt -tbl ensembl_genomes=ensembl_genomes -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=TokuDB
  #Action: table nr_ti_gi_fasta_TokuDB_cnt deleted 21139 rows!
  #Action: table nr_ti_gi_fasta_TokuDB_cnt deleted 427679 rows!
  #it also deletes all genomes having 'group' in name
@@ -5910,7 +5910,7 @@ For help write:
  #Report: found 327 genomes larger than 25000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
  #Report: found 9 genomes larger than 300000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
  
- perl ./lib/CollectGenomes.pm --mode=del_total_genomes -tbl nr_cnt=nr_ti_gi_fasta_TokuDB_cnt -tbl ti_files=ti_files -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -en=TokuDB
+ perl ./lib/CollectGenomes.pm --mode=del_total_genomes -tbl nr_cnt=nr_ti_gi_fasta_TokuDB_cnt -tbl ensembl_genomes=ensembl_genomes -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -en=TokuDB
  #imports nr and existing genomes
  #Action: import inserted 6096 rows!
  #Action: import inserted 21163 rows!
@@ -6002,9 +6002,9 @@ For help write:
  #Action: update to nr_ti_gi_fasta_Deep_cnt updated 455063 rows!
  
  ### Part VI -> combine nr genomes with Ensembl genomes and print them out:
- #deletes genomes from nr_cnt table that are present in ti_files (downloaded from Ensembl)
+ #deletes genomes from nr_cnt table that are present in ensembl_genomes (downloaded from Ensembl)
  #it also deletes genoes smaller than 2000 sequences
- perl ./lib/CollectGenomes.pm --mode=get_missing_genomes --tables nr_cnt=nr_ti_gi_fasta_TokuDB_cnt -tbl ti_files=ti_files -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ perl ./lib/CollectGenomes.pm --mode=get_missing_genomes --tables nr_cnt=nr_ti_gi_fasta_TokuDB_cnt -tbl ensembl_genomes=ensembl_genomes -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
  #Action: table nr_ti_gi_fasta_Deep_cnt deleted 21139 rows!
  #Action: table nr_ti_gi_fasta_Deep_cnt deleted 427679 rows!
  #Report: found 6245 genomes larger than 2000 proteins in table:nr_ti_gi_fasta_Deep_cnt
@@ -6037,7 +6037,7 @@ For help write:
  #Report: found 285 genomes larger than 25000 proteins in table:nr_ti_gi_fasta_Deep_cnt
  #Report: found 3 genomes larger than 300000 proteins in table:nr_ti_gi_fasta_Deep_cnt
 
- perl ./lib/CollectGenomes.pm --mode=del_total_genomes -tbl nr_cnt=nr_ti_gi_fasta_Deep_cnt -tbl ti_files=ti_files -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5626 -s /tmp/mysql_sandbox5626.sock -en=Deep
+ perl ./lib/CollectGenomes.pm --mode=del_total_genomes -tbl nr_cnt=nr_ti_gi_fasta_Deep_cnt -tbl ensembl_genomes=ensembl_genomes -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5626 -s /tmp/mysql_sandbox5626.sock -en=Deep
  #imports nr and existing genomes
  #deletes hybrid genomes
  #Action: import inserted 5928 rows!
