@@ -3147,7 +3147,7 @@ sub del_total_genomes {
 	#insert existing genomes
     my $insert_ti = qq{
     INSERT INTO $table_list (ti, species_name, source)
-    SELECT ti, species_name, source
+    SELECT ti, species_name, 'Ensembl'
 	FROM $TI_FILES_TBL
 	ORDER BY ti
     };
@@ -5782,36 +5782,36 @@ For help write:
 =head1 EXAMPLE 02.09.2015 on tiktaalik
 
  ### Part 0 -> prepare the stage:
- #create a MySQL database named with date
+ # Step1: create a MySQL database named by date
  perl ./lib/CollectGenomes.pm --mode=create_db -ho localhost -d nr_2015_9_2 -p msandbox -u msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
- #create a collection of directories inside a db directory (manually created) to store all db files and preparation
- #also copies update_phylogeny file which is manually curated
+ # Step2: create a collection of directories inside a db directory (need to create manually - by date) to store all db files and preparation
+ #also copies update_phylogeny file which is manually curated in doc directory
  perl ./lib/CollectGenomes.pm --mode=make_db_dirs -o /home/msestak/dropbox/Databases/db_02_09_2015/ -if /home/msestak/dropbox/Databases/db_29_07_15/doc/update_phylogeny_martin7.tsv
 
  ### Part I -> download genomes from Ensembl:
- #download protists, fungi, metazoa and bacteria (21085)
+ # Step 1: download protists, fungi, metazoa and bacteria (21085)
  perl ./lib/CollectGenomes.pm --mode=ensembl_ftp --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/ensembl_ftp/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
- #download vertebrates
+ # Step2: download vertebrates
  #need to scrape HTML to get to taxids in order to download vertebrates from Ensembl (+78 = total 21163) downloaded 67 vertebrates + 2 (S.cerevisiae and C. elegans) + 27 PRE (but duplicates (real 11))
  perl ./lib/CollectGenomes.pm --mode=ensembl_vertebrates --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/ensembl_vertebrates/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
- #copy ensembl proteomes to all (7 min)
+ #copy ensembl proteomes to ensembl_all (7 min)
  time cp ./ensembl_ftp/* ./ensembl_all/
  cp -i ./ensembl_vertebrates/* ./ensembl_all/
- cp: overwrite `./ensembl_all/4932'? y
- cp: overwrite `./ensembl_all/6239'? y
+ cp: overwrite `./ensembl_all/4932'? y   (S. cerevisiae)
+ cp: overwrite `./ensembl_all/6239'? y   (C. elegans)
 
  
  ### Part II -> download genomes from NCBI:
- #download NCBI nr protein fasta file with gi_taxid_prot and taxdump
+ # Step1: download NCBI nr protein fasta file, gi_taxid_prot and taxdump
  perl ./lib/CollectGenomes.pm --mode=nr_ftp -o /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/ -rh ftp.ncbi.nih.gov -rd /blast/db/FASTA/ -rf nr.gz
  perl ./lib/CollectGenomes.pm --mode=nr_ftp -o /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/ -rh ftp.ncbi.nih.gov -rd /pub/taxonomy/ -rf gi_taxid_prot.dmp.gz
- #taxdmp is needed for names and nodes files (phylogeny information)
  perl ./lib/CollectGenomes.pm --mode=nr_ftp -o /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/ -rh ftp.ncbi.nih.gov -rd /pub/taxonomy/ -rf taxdump.tar.gz
+ #taxdmp is needed for names and nodes files (phylogeny information)
  [msestak@tiktaalik nr_raw]$ tar -xzvf taxdump.tar.gz
  [msestak@tiktaalik nr_raw]$ rm citations.dmp delnodes.dmp gc.prt merged.dmp gencode.dmp
 
  ### Part III -> load nr into database:
- #load gi_taxid_prot to connect gi from nr and ti from gi_taxid_prot
+ # Step1: load gi_taxid_prot to connect gi from nr and ti from gi_taxid_prot
  perl ./lib/CollectGenomes.pm --mode=gi_taxid -if /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/gi_taxid_prot.dmp.gz -o ./t/nr/ -ho localhost -u msandbox -p msandbox -d nr_2015_9_2 --port=5625 --socket=/tmp/mysql_sandbox5625.sock --engine=TokuDB
  perl ./lib/CollectGenomes.pm --mode=extract_and_load_nr -if /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/nr.gz -o ./t/nr/ -ho localhost -u msandbox -p msandbox -d nr_2015_9_2 --port=5625 --socket=/tmp/mysql_sandbox5625.sock --engine=TokuDB
  #File /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/nr.gz has 70614921 lines!
@@ -5819,16 +5819,17 @@ For help write:
  #Report: import inserted 211434339 rows! in 28969 sec (7298 rows/sec)
  
  ### Part IV -> set phylogeny for focal species:
-
+ # Step1: load raw names and nodes and prune nodes of Viruses and other unwanted sequences
  perl ./lib/CollectGenomes.pm --mode=import_raw_names -if /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/names.dmp -o /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=TokuDB
  #Action: inserted 1987756 rows to names:names_dmp in 81 sec (24540 rows/sec)
  #PRUNING partI: excluded Phages, Viruses, Sythetic and Environmental samples while loading nodes_dmp
  perl ./lib/CollectGenomes.pm --mode=import_raw_nodes -if /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/nodes.dmp -o /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=TokuDB
  #Action: inserted 1124194 rows to nodes:nodes_dmp in 45 sec (24982 rows/s)
  
- #get list of files for MakeTree
+ # Step2: import tis of Ensembl genomes, count them and get a list of files for MakeTree
  perl ./lib/CollectGenomes.pm --mode=get_existing_ti --in=/home/msestak/dropbox/Databases/db_02_09_2015/data/ensembl_all/ --tables names=names_raw_2015_9_3_new -o /home/msestak/dropbox/Databases/db_02_09_2015/doc/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -en=TokuDB
 
+ # Step3: run MakeTree to get modified phylogeny
  [msestak@tiktaalik db_02_09_2015]$ MakeTree -m ./data/nr_raw/names_raw_2015_9_3 -n ./data/nr_raw/nodes_raw_2015_9_3 -i ./doc/update_phylogeny_martin7.tsv -d 3 -s ./doc/ensembl -t 6072 | TreeIlustrator.pl
  Eumetazoa[6072]
  ├─Placozoa[10226]
@@ -5953,6 +5954,8 @@ For help write:
  ### Part VII -> download genomes from JGI:
  perl ./lib/CollectGenomes.pm --mode=jgi_download --names=names_raw_2015_9_3_new -tbl gold=gold_ver5 -o /home/msestak/dropbox/Databases/db_02_09_2015/data/xml/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
+ #remove genomes found in nr or ensembl (jgi_clean directory)
+ perl ./lib/CollectGenomes.pm --mode=copy_jgi_genomes -tbl ti_full_list=ti_full_list -tbl names=names_raw_2015_9_3_new --in=/home/msestak/dropbox/Databases/db_02_09_2015/data/jgi/ --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/jgi_clean/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
 
  ALTERNATIVE with Deep:
