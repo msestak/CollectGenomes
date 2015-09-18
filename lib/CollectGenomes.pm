@@ -67,6 +67,7 @@ our @EXPORT_OK = qw{
 	print_nr_genomes
 	merge_existing_genomes
 	copy_external_genomes
+	copy_jgi_genomes
 	ensembl_ftp
 	ensembl_ftp_vertebrates
 	prepare_cdhit_per_phylostrata
@@ -155,6 +156,7 @@ sub main {
         print_nr_genomes              => \&print_nr_genomes,
         merge_existing_genomes        => \&merge_existing_genomes,
 		copy_external_genomes         => \&copy_external_genomes,
+		copy_jgi_genomes              => \&copy_jgi_genomes,
         ensembl_vertebrates           => \&ensembl_ftp_vertebrates,
         ensembl_ftp                   => \&ensembl_ftp,
         prepare_cdhit_per_phylostrata => \&prepare_cdhit_per_phylostrata,
@@ -3549,6 +3551,7 @@ sub make_db_dirs {
       data/nr_raw
       data/nr_genomes
       data/jgi
+      data/jgi_clean
       data/xml
       data/external
       data/all
@@ -3712,28 +3715,30 @@ sub copy_external_genomes {
 	my @external_tis = map {path($_)->basename} @ti_files;
 	#print Dumper(\@external_tis);
 
-	#FIRST compare to ensembl_all and nr_genomes directories
+	#FIRST compare to ensembl_all and nr_genomes and jgi_clean directories
 	my $ens_path = path(path($OUT)->parent, 'ensembl_all')->canonpath;
 	my $nr_path  = path(path($OUT)->parent, 'nr_genomes')->canonpath;
-	my @ti_files_ens = File::Find::Rule->file()
-								   ->name(qr/\A\d+\z/)
-								   ->in($ens_path);
-	#print Dumper(\@ti_files_ens);
-	my %ens_tis = map {path($_)->basename => undef} @ti_files_ens;
-	#print Dumper(\%ens_tis);
-	my @ti_files_nr  = File::Find::Rule->file()
-								   ->name(qr/\A\d+\z/)
-								   ->in($nr_path);
-	my %nr_tis = map {path($_)->basename => undef} @ti_files_ens;
-	
+	my $jgi_path  = path(path($OUT)->parent, 'jgi_clean')->canonpath;
+
+    my @ti_files_ens = File::Find::Rule->file()->name(qr/\A\d+\z/)->in($ens_path);
+    #print Dumper(\@ti_files_ens);
+    my %ens_tis = map { path($_)->basename => undef } @ti_files_ens;
+    #print Dumper(\%ens_tis);
+
+    my @ti_files_nr = File::Find::Rule->file()->name(qr/\A\d+\z/)->in($nr_path);
+    my %nr_tis = map { path($_)->basename => undef } @ti_files_nr;
+
+    my @ti_files_jgi = File::Find::Rule->file()->name(qr/\A\d+\z/)->in($jgi_path);
+    my %jgi_tis = map { path($_)->basename => undef } @ti_files_jgi;
+
 	my @not_found;
 	foreach my $ti (@external_tis) {
 		my $ti_orig_loc = path($IN, $ti)->canonpath;
-		if ( (! exists $ens_tis{$ti}) and (! exists $nr_tis{$ti}) ) {
+		if ( (! exists $ens_tis{$ti}) and (! exists $nr_tis{$ti}) and (! exists $jgi_tis{$ti})) {
 			push @not_found, $ti_orig_loc;
 		}
 		else {
-			$log->warn("Action: $ti_orig_loc excluded becuse found in ensembl_all or nr_genomes");
+			$log->warn("Action: $ti_orig_loc excluded because found in ensembl_all or nr_genomes or jgi_clean");
 		}
 	}
 	#print Dumper(\@not_found);
@@ -3743,6 +3748,134 @@ sub copy_external_genomes {
 	my $q_in = qq{
 	INSERT INTO ti_full_list (ti, genes_cnt, source)
 	VALUES (?, ?, 'external')
+	};
+	my $sth = $dbh->prepare($q_in);
+
+	#select query to get ti for comparison to fasta_file
+	my $q_sel = qq{
+	SELECT ti FROM ti_full_list
+	WHERE ti = ?
+	};
+	my $sth_sel = $dbh->prepare($q_sel);
+
+	#starting iteration over @ti_files to copy genomes from $IN to $OUT
+	foreach my $ti_file (@not_found) {
+		$log->trace( "Action: working on $ti_file" );
+		my $ti_from_file = path($ti_file)->basename;
+		my $end_ti_file = path($OUT, $ti_from_file);
+		
+		#compare ti_from_file to ti in db to see if it exists
+		$sth_sel->execute($ti_from_file);
+		my ($ti_from_db) = $sth_sel->fetchrow_array();
+
+		if ($ti_from_db) {
+			$log->error("Ti file:$ti_file found in TI_FULLLIST");
+			#delete ti_files (genomes) if they exist in $OUT dir and TABLE
+			if (-f $end_ti_file) {
+				unlink $end_ti_file and $log->warn( "Action: file $end_ti_file unlinked" );
+			}
+		}
+		else {
+			#unlink if already there
+			if (-f $end_ti_file) {
+				unlink $end_ti_file and $log->warn( "Action: file $end_ti_file unlinked" );
+			}
+			#copy fasta from $IN to $OUT and transform as needed
+			$log->info( "Action: file $ti_file not found in modified list:$TI_FULLLIST" );
+			my $fasta_cnt = collect_fasta_print({FILE => $ti_file, TAXID => $ti_from_file, %{$param_href} });
+
+			#insert into ti_full_list
+			eval {$sth->execute($ti_from_file, $fasta_cnt); };
+			my $rows = $sth->rows;
+			$log->debug( "Action: table $TI_FULLLIST inserted $rows rows for ti:$ti_from_file" ) unless $@;
+			$log->error( "Action: inserting $TI_FULLLIST failed for ti:$ti_from_file:$@" ) if $@;
+			if ($@) {
+				unlink $end_ti_file and $log->warn( "Action: file $end_ti_file unlinked because it already exists in $TI_FULLLIST table" );
+			}
+		}
+	}
+	
+	#UPDATE with species_names
+    my $up_sp = qq{
+	UPDATE $TI_FULLLIST AS ti
+	SET ti.species_name = (SELECT DISTINCT na.species_name
+	FROM $NAMES AS na WHERE ti.ti = na.ti)
+	WHERE ti.species_name IS NULL;
+    };
+    eval { $dbh->do($up_sp, { async => 1 } ) };
+	my $rows_up = $dbh->mysql_async_result;
+    $log->debug( "Action: update to $TI_FULLLIST updated $rows_up rows!" ) unless $@;
+    $log->error( "Action: updating $TI_FULLLIST failed: $@" ) if $@;
+	
+	$sth->finish;
+	$sth_sel->finish;
+	$dbh->disconnect;
+
+	return;
+}
+
+
+### INTERFACE SUB ###
+# Usage      : copy_jgi_genomes( $param_href );
+# Purpose    : prints genomes outside Ensembl or  present genomes to dropdox/D.../db../data/eukarya
+# Returns    : nothing
+# Parameters : ( $param_href )
+# Throws     : croaks for parameters
+# Comments   : it takes genomes from old directory (base) and prints them to $OUT
+# See Also   : 
+sub copy_jgi_genomes {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak( 'copy_jgi_genomes() needs a $param_href' ) unless @_ == 1;
+    my ( $param_href ) = @_;
+
+	my $DATABASE = $param_href->{DATABASE} or $log->logcroak( 'no $DATABASE specified on command line!' );
+	my $OUT      = $param_href->{OUT}      or $log->logcroak( 'no $OUT specified on command line!' );
+	my $IN       = $param_href->{IN}   or $log->logcroak( 'no $IN specified on command line!' );
+    my %TABLES   = %{ $param_href->{TABLES} } or $log->logcroak('no $TABLES specified on command line!');
+    my $TI_FULLLIST = $TABLES{ti_full_list};
+    my $NAMES       = $TABLES{names};
+			
+	#get new handle
+    my $dbh = dbi_connect($param_href);
+
+	#get all existing genomes from $IN
+	my @ti_files = File::Find::Rule->file()
+								   ->name(qr/\A\d+\z/)
+								   ->in($IN);
+	@ti_files = sort {$a cmp $b} @ti_files;
+	my @jgi_tis = map {path($_)->basename} @ti_files;
+	#print Dumper(\@external_tis);
+
+    #FIRST compare to ensembl_all and nr_genomes directories
+    my $ens_path = path( path($OUT)->parent, 'ensembl_all' )->canonpath;
+    my $nr_path  = path( path($OUT)->parent, 'nr_genomes' )->canonpath;
+
+    my @ti_files_ens = File::Find::Rule->file()->name(qr/\A\d+\z/)->in($ens_path);
+    #print Dumper(\@ti_files_ens);
+    my %ens_tis = map { path($_)->basename => undef } @ti_files_ens;
+    #print Dumper(\%ens_tis);
+
+    my @ti_files_nr = File::Find::Rule->file()->name(qr/\A\d+\z/)->in($nr_path);
+    my %nr_tis = map { path($_)->basename => undef } @ti_files_nr;
+
+    my @not_found;
+    foreach my $ti (@jgi_tis) {
+        my $ti_orig_loc = path( $IN, $ti )->canonpath;
+        if ( ( !exists $ens_tis{$ti} ) and ( !exists $nr_tis{$ti} ) ) {
+            push @not_found, $ti_orig_loc;
+        }
+        else {
+            $log->warn("Action: $ti_orig_loc excluded because found in ensembl_all or nr_genomes");
+        }
+    }
+
+    #print Dumper(\@not_found);
+
+	#SECOND check for existence in TI_FULLLIST and copy to external
+	#insert query to insert to ti_full_list
+	my $q_in = qq{
+	INSERT INTO ti_full_list (ti, genes_cnt, source)
+	VALUES (?, ?, 'JGI')
 	};
 	my $sth = $dbh->prepare($q_in);
 
@@ -4080,7 +4213,7 @@ sub merge_existing_genomes {
 
 	#SECOND PART: copy to $OUT (to all dir) if found in TI_FULLLIST table
 	my $genome_cnt = 0;
-	foreach my $genome (@nr, @ens, @jgi, @ext) {
+	foreach my $genome (@nr, @jgi, @ext, @ens) {
 		$log->trace( "Action: working on $genome" );
 		my $ti_from_file = path($genome)->basename;
 
