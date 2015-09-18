@@ -4606,7 +4606,7 @@ sub get_ensembl_genomes {
     my @sorted_files =
 	    map { $_->[0] }                    #return full filename (aref position 0)
 	    sort { $a->[2] <=> $b->[2] }       #sort by num (ref position 2)
-        map { [ $_, /\A(.+)(\d+)\z/ ] }   #aref with [file, basename, num]
+        map { [ $_, /\A(.+)(\d+)\z/ ] }    #aref with [file, basename, num]
         @ti_files;
 	#say "SORTED:", Dumper(\@sorted_files);
 
@@ -4628,18 +4628,13 @@ sub get_ensembl_genomes {
     eval { $dbh->do($create_q) };
 	create_table( { TABLE_NAME => $table_ti, DBH => $dbh, QUERY => $create_q, %{$param_href} } );
 
-	#prepare select species_name query
-	my $sel_sp = qq{
-	SELECT species_name
-	FROM $NAMES
-	WHERE ti = ?
-	};
-	my $sth_sel = $dbh->prepare($sel_sp);
+	#set because VARCHAR(200) in species_name
+	$dbh->{LongReadLen} = 200;
 
 	#prepare insert ensembl_genomes query
 	my $ins_q = qq{
-	INSERT INTO $table_ti (ti, genes_cnt, species_name, source)
-	VALUES( ?, ?, ?, ? )
+	INSERT INTO $table_ti (ti, genes_cnt, source)
+	VALUES( ?, ?, ? )
 	};
 	my $sth_ins = $dbh->prepare($ins_q);
 
@@ -4662,15 +4657,11 @@ sub get_ensembl_genomes {
 		}
 		#say "Records:$fasta_cnt";
 
-		$sth_sel->execute($ti);
-		my ($species_name) = $sth_sel->fetchrow_array();
-		#say "SPECIES:$species_name";
-
 		#insert into table
-		eval {$sth_ins->execute($ti, $fasta_cnt, $species_name, 'Ensembl'); };
+		eval {$sth_ins->execute($ti, $fasta_cnt, 'Ensembl'); };
 		my $rows_ins = $sth_ins->rows;
 		$log->error("Action: failed insert to table $table_ti") if $@;
-		$log->debug("Action: table $table_ti inserted for species:{$species_name} $rows_ins rows") unless $@;
+		$log->debug("Action: table $table_ti inserted for ti:{$ti} $rows_ins row") unless $@;
 	}
 
 	#species with changed tax_ids
@@ -4707,7 +4698,7 @@ sub get_ensembl_genomes {
 		};
 		eval { $dbh->do($update_q, { async => 1 } ) };
 		my $rows_up = $dbh->mysql_async_result;
-    	$log->debug( "Action: update to $table_ti for $species_name updated $rows_up rows!" ) unless $@;
+		$log->debug( "Action: update to $table_ti for $species_name updated $rows_up rows!" ) unless $@;
     	$log->error( "Action: updating $table_ti for $species_name failed: $@" ) if $@;
 	}
 
@@ -4724,10 +4715,22 @@ sub get_ensembl_genomes {
 		say {$ti_fh} $_;
 	}
 
+    #UPDATE species_name
+    my $up_ens = qq{
+	UPDATE $table_ti AS ti
+	SET ti.species_name = (SELECT DISTINCT na.species_name
+	FROM $NAMES AS na WHERE ti.ti = na.ti)
+    };
+    eval { $dbh->do($up_ens, { async => 1 } ) };
+	my $rows_up = $dbh->mysql_async_result;
+    $log->debug( "Action: update to $table_ti updated $rows_up rows!" ) unless $@;
+    $log->error( "Action: updating $table_ti failed: $@" ) if $@;
+
 	#report number of genomes in ensembl_genomes table
     my $rows_end = $dbh->selectrow_array("SELECT COUNT(*) FROM $table_ti");
     $log->info("Report: table $table_ti has $rows_end rows");
 
+	$sth_ins->finish;
     $dbh->disconnect;
     return;
 }
