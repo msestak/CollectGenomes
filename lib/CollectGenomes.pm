@@ -4964,7 +4964,7 @@ sub download_phytozome {
 
 
 	#download proteomes using tis from jgi_download table
-	curl_genomes($param_href);
+	#curl_genomes($param_href);                          #UNCOMMENT when running separately
 }
 
 
@@ -5051,7 +5051,7 @@ sub download_metazome {
 
 
 	#download proteomes using tis from jgi_download table
-	curl_genomes($param_href);
+	#curl_genomes($param_href);                          #UNCOMMENT when running separately
 }
 
 
@@ -5137,7 +5137,7 @@ sub download_fungi {
 
 
     #download proteomes using tis from jgi_download table
-    curl_genomes($param_href);
+	curl_genomes($param_href);                           #always UNCOMMENTED because it runs last
 }
 
 
