@@ -4614,11 +4614,15 @@ sub jgi_download {
     $log->logcroak('jgi_download() needs a $param_href') unless @_ == 1;
     my ($param_href) = @_;
 
+	my %params_phytozome = %{$param_href};
+	my %params_metazome = %{$param_href};
+	my %params_fungi = %{$param_href};
     my $OUT      = $param_href->{OUT}      or $log->logcroak('no $OUT specified on command line!');
     my $DATABASE = $param_href->{DATABASE} or $log->logcroak('no $DATABASE specified on command line!');
     my $ENGINE   = defined $param_href->{ENGINE} ? $param_href->{ENGINE} : 'InnoDB';
     my $table    = 'jgi_download';
 
+	say "JGI_DOWNLOAD:before ALL:", Dumper($param_href);
     #get new handle
     my $dbh = dbi_connect($param_href);
 
@@ -4653,15 +4657,21 @@ sub jgi_download {
 
 	#downloads and loads GOLD database to use later (as a source of taxids)
 	set_gold_table($param_href);
-
+	
+	#say "JGI_DOWNLOAD:before PHYTOZOME_DOWNLOAD:", Dumper($param_href);
+	#say "JGI_DOWNLOAD:before PHYTOZOME_DOWNLOAD:%params_phytozome", Dumper(\%params_phytozome);
 	#download genomes and save them with taxid from gold table
-	download_phytozome($param_href);
-	sleep 5;
-
-	download_metazome($param_href);
+	download_phytozome(\%params_phytozome);
 	sleep 5;
 	
-	download_fungi($param_href);
+	#say "JGI_DOWNLOAD:before METAZOME_DOWNLOAD:", Dumper($param_href);
+	#say "JGI_DOWNLOAD:before METAZOME_DOWNLOAD:%params_metazome", Dumper(\%params_metazome);
+	download_metazome(\%params_metazome);
+	sleep 5;
+	
+	#say "JGI_DOWNLOAD:before FUNGI_DOWNLOAD:", Dumper($param_href);
+	#say "JGI_DOWNLOAD:before FUNGI_DOWNLOAD:%params_fungi", Dumper(\%params_fungi);
+	download_fungi(\%params_fungi);
 	sleep 5;
 
     # http://genome.jgi-psf.org/ext-api/downloads/get-directory?organism=fungi
@@ -4840,6 +4850,8 @@ sub set_gold_table {
         264402  => 'Capsella_grandiflora',
 		#3711    => 'Brassica_rapa',
         3711    => 'BrapaFPsc',
+		671525  => 'Sida fallax',
+		4556    => 'Setaria viridis',
 
 		37653   => 'Obimaculoides',
 		6087    => 'Hmagnipapillata',
@@ -4925,7 +4937,8 @@ sub download_phytozome {
 
 						#skip unwanted divisions and go into {annotation} folder
 						if ($sp_name =~ /annotation/) {
-							list_xml_folders( { FOLDER => $early_folder, %{$param_href} } );
+							$log->warn("Action: working in $sp_name");
+							list_xml_folders( { FOLDER => $sp_folder, %{$param_href} } );
 						}
 					}   #end EARLY_SPECIES
 				}   #end EARLY
@@ -4976,8 +4989,9 @@ sub download_metazome {
 
 	my $URL = q{http://genome.jgi.doe.gov/ext-api/downloads/get-directory?organism=Metazome};
 	
-	my ($xml_name, $xml_path) = get_jgi_xml( { URL => $URL, %{$param_href} } );
+	my ($xml_name, $xml_path) = get_jgi_xml( { URL => $URL, OUT => $OUT } );
 
+	#say "DOWNLOAD_METAZOME:xml_path:$xml_path";
 	my $twig= new XML::Twig(pretty_print => 'indented');
 	$twig->parsefile( $xml_path );			# build the twig
 	
@@ -5145,6 +5159,7 @@ sub get_jgi_xml {
     my $cookie_path = path( $OUT, 'cookie_jgi' );
     ( my $xml_name = $URL ) =~ s{\A(?:.+?)organism=(.+)\z}{$1};
     my $xml_path = path( $OUT, $xml_name . '.xml' )->canonpath;
+	#say "GET_JGI_XML:xml_path:$xml_path";
 
 	CMD: {
 		my $cmd = qq{curl -C - --retry 999 --retry-max-time 0 $URL -b $cookie_path -c $cookie_path > $xml_path};
@@ -5159,6 +5174,7 @@ sub get_jgi_xml {
     	        $log->error("ZERO size: $xml_path Going to redo:$i");
 				sleep 1;
 				redo CMD if $i < 101;
+				last CMD if $i == 100;
     	    }
     	}
     	else {
