@@ -3181,10 +3181,10 @@ sub del_total_genomes {
     $log->debug( "Action: import inserted $rows rows!" ) unless $@;
     $log->error( "Action: loading $table_list failed: $@" ) if $@;
 
-	#insert existing genomes
+	#insert Ensembl genomes
     my $insert_ti = qq{
-    INSERT INTO $table_list (ti, species_name, source)
-    SELECT ti, species_name, 'Ensembl'
+    INSERT INTO $table_list (ti, genes_cnt, species_name, source)
+    SELECT ti, genes_cnt, species_name, source
 	FROM $TI_FILES_TBL
 	ORDER BY ti
     };
@@ -5959,10 +5959,10 @@ For help write:
  #Report: found 565 genomes larger than 15000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
  #Report: found 417 genomes larger than 20000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
  #Report: found 327 genomes larger than 25000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
- #Report: found 235 genomes larger than 300000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 170 genomes larger than 300000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
  
+ # Step3: imports nr and existing genomes
  perl ./lib/CollectGenomes.pm --mode=del_total_genomes -tbl nr_cnt=nr_ti_gi_fasta_TokuDB_cnt -tbl ensembl_genomes=ensembl_genomes -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -en=TokuDB
- #imports nr and existing genomes
  #Action: import inserted 6096 rows!
  #Action: import inserted 21163 rows!
  #Action: deleted 2 hybrid species from ti_full_list
