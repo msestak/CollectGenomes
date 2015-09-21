@@ -2816,7 +2816,7 @@ sub get_missing_genomes {
     };
     eval { $dbh->do($delete_cnt, { async => 1 } ) };
 	my $rows_del = $dbh->mysql_async_result;
-    $log->debug( "Action: table $NR_CNT_TBL deleted $rows_del rows!" ) unless $@;
+    $log->debug( "Action: table $NR_CNT_TBL deleted $rows_del rows from Ensembl" ) unless $@;
     $log->error( "Action: deleting $NR_CNT_TBL failed: $@" ) if $@;
 
 	#DELETE genomes smaller than 2000 proteins
@@ -2826,7 +2826,7 @@ sub get_missing_genomes {
     };
     eval { $dbh->do($delete_cnt2, { async => 1 } ) };
 	my $rows_del2 = $dbh->mysql_async_result;
-    $log->debug( "Action: table $NR_CNT_TBL deleted $rows_del2 rows!" ) unless $@;
+    $log->debug( "Action: table $NR_CNT_TBL deleted $rows_del2 rows smaller than 2000 genes" ) unless $@;
     $log->error( "Action: deleting $NR_CNT_TBL failed: $@" ) if $@;
 
 	#delete species if it contains group in name
@@ -3060,7 +3060,40 @@ sub del_nr_genomes {
 			}
 		}
 	}
-	
+
+	#check if genomes larger than 30_000 seq and offer to delete from nr count table
+    my $sel_large = qq{
+	SELECT ti, genes_cnt, species_name
+	FROM $NR_CNT_TBL
+	WHERE genes_cnt >= 30000
+	};
+	my %ti_large = map { $_->[0], [ $_->[1], $_->[2] ] } @{ $dbh->selectall_arrayref($sel_large) };
+    my $cnt_pairs = keys %ti_large;
+    $log->info("Report: Found $cnt_pairs ti->[genes_cnt-species_name] pairs");
+
+	#prepare delete query for large genomes
+	my $del_q = qq{
+	DELETE nr FROM $NR_CNT_TBL AS nr
+	WHERE ti = ?
+	};
+	my $sth_del = $dbh->prepare($del_q);
+
+    while ( my ( $ti, $species_ref ) = each %ti_large ) {
+        my $genes_cnt    = $species_ref->[0];
+        my $species_name = $species_ref->[1];
+		my $decision = prompt "Do you want to delete species:{$species_name} with->$genes_cnt genes from:NCBI?",
+		               -yn,
+					   -single;
+		if ($decision eq 'y') {
+			eval {$sth_del->execute($ti); };
+			$log->error("Action: delete failed for species:$species_name") if $@;
+			$log->debug("Action: deleted species:{$species_name} from NCBI with $genes_cnt from $NR_CNT_TBL") unless $@;
+		}
+        else {
+            $log->trace("Action: species:{$species_name} from NCBI with $genes_cnt left in $NR_CNT_TBL");
+        }
+    }
+
 	#report the changes made
 	my $q = qq{SELECT COUNT(*) FROM $NR_CNT_TBL WHERE genes_cnt >= ?};
 	my $sth = $dbh->prepare($q);
@@ -3070,6 +3103,7 @@ sub del_nr_genomes {
 		$log->info("Report: found $genome_cnt genomes larger than $i proteins in table:$NR_CNT_TBL");
 	}
 	
+	$sth_del->finish;
 	$sth->finish;
 	$dbh->disconnect;
 
@@ -4216,7 +4250,7 @@ sub merge_existing_genomes {
 
 	#SECOND PART: copy to $OUT (to all dir) if found in TI_FULLLIST table
 	my $genome_cnt = 0;
-	foreach my $genome (@nr, @jgi, @ext, @ens) {
+	foreach my $genome (@jgi, @nr, @ext, @ens) {
 		$log->trace( "Action: working on $genome" );
 		my $ti_from_file = path($genome)->basename;
 
@@ -5891,11 +5925,12 @@ For help write:
  ### Part VI -> combine nr genomes with Ensembl genomes and print them out:
  # Step1:delete genomes from nr_cnt table that are present in ensembl_genomes (downloaded from Ensembl)
  #it also deletes genomes smaller than 2000 sequences
+ #it also deletes all genomes having 'group' in name
+ #prints report at end
  perl ./lib/CollectGenomes.pm --mode=get_missing_genomes --tables nr_cnt=nr_ti_gi_fasta_TokuDB_cnt -tbl ensembl_genomes=ensembl_genomes -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=TokuDB
  #Action: table nr_ti_gi_fasta_TokuDB_cnt deleted 21139 rows!
  #Action: table nr_ti_gi_fasta_TokuDB_cnt deleted 427679 rows!
- #it also deletes all genomes having 'group' in name
- #prints report at end
+ #Action: deleted 20 groups from table:nr_ti_gi_fasta_TokuDB_cnt
  #Report: found 6225 genomes larger than 2000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
  #Report: found 4854 genomes larger than 3000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
  #Report: found 3533 genomes larger than 4000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
@@ -5908,10 +5943,10 @@ For help write:
  #Report: found 618 genomes larger than 15000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
  #Report: found 468 genomes larger than 20000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
  #Report: found 373 genomes larger than 25000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
- #Report: found 26 genomes larger than 300000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 276 genomes larger than 300000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
 
+ # Step2: delete genomes with species and strain genomes overlaping (nr only)
  perl ./lib/CollectGenomes.pm --mode=del_nr_genomes -tbl nr_cnt=nr_ti_gi_fasta_TokuDB_cnt -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
- #deletes genomes with species and strain genomes overlaping (nr only)
  #Report: found 6096 genomes larger than 2000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
  #Report: found 4750 genomes larger than 3000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
  #Report: found 3446 genomes larger than 4000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
@@ -5924,7 +5959,7 @@ For help write:
  #Report: found 565 genomes larger than 15000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
  #Report: found 417 genomes larger than 20000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
  #Report: found 327 genomes larger than 25000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
- #Report: found 9 genomes larger than 300000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
+ #Report: found 235 genomes larger than 300000 proteins in table:nr_ti_gi_fasta_TokuDB_cnt
  
  perl ./lib/CollectGenomes.pm --mode=del_total_genomes -tbl nr_cnt=nr_ti_gi_fasta_TokuDB_cnt -tbl ensembl_genomes=ensembl_genomes -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -en=TokuDB
  #imports nr and existing genomes
