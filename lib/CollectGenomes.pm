@@ -4180,7 +4180,7 @@ sub merge_existing_genomes {
     my $TI_FULLLIST = $TABLES{ti_full_list};
 	my $nr_dir   = path(path($OUT)->parent, 'nr_genomes');
 	my $ens_dir  = path(path($OUT)->parent, 'ensembl_all');
-	my $jgi_dir  = path(path($OUT)->parent, 'jgi');
+	my $jgi_dir  = path(path($OUT)->parent, 'jgi_clean');
 	my $ext_dir  = path(path($OUT)->parent, 'external');
 
 			
@@ -5988,21 +5988,21 @@ For help write:
 
  # Step5: remove genomes from jgi that are found in nr or ensembl (to jgi_clean directory)
  perl ./lib/CollectGenomes.pm --mode=copy_jgi_genomes -tbl ti_full_list=ti_full_list -tbl names=names_raw_2015_9_3_new --in=/home/msestak/dropbox/Databases/db_02_09_2015/data/jgi/ --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/jgi_clean/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
- # Action: update to ti_full_list updated 220 rows!
+ # Action: update to ti_full_list updated 221 rows!
  # Report: found 219 JGI genomes in table:ti_full_list
 
  # Step6: copy genomes (external) from previous database not in this one
  perl ./lib/CollectGenomes.pm --mode=copy_external_genomes -tbl ti_full_list=ti_full_list -tbl names=names_raw_2015_9_3_new --in=/home/msestak/dropbox/Databases/db_29_07_15/data/eukarya --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/external/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
  # Action: update to ti_full_list updated 168 rows!
- #254 genomes inserted
+ # Report: found 167 external genomes in table:ti_full_list
 
- #delete duplicates from final database
+ # Step7: delete duplicates from final database
  perl ./lib/CollectGenomes.pm --mode=del_species_with_strain -tbl ti_full_list=ti_full_list -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
  #Action: deleted 1 hybrid species from ti_full_list
  #10 genomes deleted
- #Report: found 26508 genomes in table:ti_full_list
+ #Report: found 26589 genomes in table:ti_full_list
 
- #merge all genomes to all:
+ # Step8: merge jgi, nr, external, ensembl genomes to all:
  perl ./lib/CollectGenomes.pm --mode=merge_existing_genomes -o /home/msestak/dropbox/Databases/db_02_09_2015/data/all/ -tbl ti_full_list=ti_full_list -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
  #Copied 26465 genomes to /home/msestak/dropbox/Databases/db_02_09_2015/data/all (43 GB)
 
