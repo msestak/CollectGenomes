@@ -2844,11 +2844,14 @@ sub get_missing_genomes {
 	WHERE species_name = ?
 	};
 	my $sth_del = $dbh->prepare($del_grp);
+	my $grp_del = 0;
 	foreach my $species_name (@groups) {
 		eval { $sth_del->execute($species_name); };
+		$grp_del++;
 		$log->debug("Action: deleted group:$species_name from table:$NR_CNT_TBL") unless $@;
 		$log->error("Action: failed delete for group:$species_name for table:$NR_CNT_TBL") if $@;
 	}
+	$log->info("Action: deleted $grp_del groups from table:$NR_CNT_TBL");
 
 
 	my $q = qq{SELECT COUNT(*) FROM $NR_CNT_TBL WHERE genes_cnt >= ?};
@@ -5835,6 +5838,8 @@ For help write:
  
  # Step2: import tis of Ensembl genomes, count them and get a list of files for MakeTree
  perl ./lib/CollectGenomes.pm --mode=get_ensembl_genomes --in=/home/msestak/dropbox/Databases/db_02_09_2015/data/ensembl_all/ --tables names=names_raw_2015_9_3_new -o /home/msestak/dropbox/Databases/db_02_09_2015/doc/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -en=TokuDB
+ #Action: update to ensembl_genomes updated 21163 rows!
+ #Report: table ensembl_genomes has 21163 rows
 
  # Step3: run MakeTree to get modified phylogeny
  [msestak@tiktaalik db_02_09_2015]$ MakeTree -m ./data/nr_raw/names_raw_2015_9_3 -n ./data/nr_raw/nodes_raw_2015_9_3 -i ./doc/update_phylogeny_martin7.tsv -d 3 -s ./doc/ensembl -t 6072 | TreeIlustrator.pl
@@ -5857,30 +5862,34 @@ For help write:
  Nodes: ./data/nr_raw/nodes_raw_2015_9_3.new
  Names: ./data/nr_raw/names_raw_2015_9_3.new
  
+ # Step4: import modified names and nodes to database
  perl ./lib/CollectGenomes.pm --mode=import_names -if /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/names_raw_2015_9_3.new -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=TokuDB
  perl ./lib/CollectGenomes.pm --mode=import_nodes -if /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/nodes_raw_2015_9_3.new -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=TokuDB
 
+ # Step5: create phylo tables for Other(28384 for pruning) and Species of interest (here 7955 Danio rerio)
  perl ./lib/CollectGenomes.pm -mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_raw_2015_9_3_new -t 7955 -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v --engine=TokuDB
  perl ./lib/CollectGenomes.pm -mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_raw_2015_9_3_new -t 28384 -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v --engine=TokuDB
  
- #PRUNING partII: delete rest of Other sequences (28384 most deleted in loading raw nodes - Synthetic)
+ # Step6: PRUNING partII: delete rest of Other sequences (28384 most deleted in loading raw nodes - Synthetic)
  perl ./lib/CollectGenomes.pm -mode=del_virus_from_nr -tbl nr=gi_taxid_prot_TokuDB -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v
 
- #PRUNING partIII: delete all taxids that are present in gi_ti_prot_dmp table but not in updated nodes table
+ # Step7: PRUNING partIII: delete all taxids that are present in gi_ti_prot_dmp table but not in updated nodes table
  #also delete all taxids which are not leaf nodes (species)
  perl ./lib/CollectGenomes.pm -mode=del_missing_ti -tbl nr=gi_taxid_prot_TokuDB -tbl nodes=nodes_raw_2015_9_3_new -tbl names=names_raw_2015_9_3_new -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v
  #Report: deleted total of 2630957 rows in mode: genera
 
  ### Part V -> get genomes from nr base:
+ # Step1: long running - JOIN of nr base and gi_taxid_prot table
  perl ./lib/CollectGenomes.pm --mode=ti_gi_fasta -d nr_2015_9_2 -ho localhost -u msandbox -p msandbox --port=5625 --socket=/tmp/mysql_sandbox5625.sock --engine=TokuDB
  #Report: import inserted 204044303 rows in 25266 sec (8075 rows/sec)
 
+ # Step2: COUNT all genomes by taxid
  perl ./lib/CollectGenomes.pm --mode=nr_genome_counts --tables nr=nr_ti_gi_fasta_TokuDB --tables names=names_raw_2015_9_3_new -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=TokuDB
  #Action: import to nr_ti_gi_fasta_TokuDB_cnt inserted 455063 rows in 900 sec 
  #Action: update to nr_ti_gi_fasta_TokuDB_cnt updated 455063 rows!
  
  ### Part VI -> combine nr genomes with Ensembl genomes and print them out:
- #deletes genomes from nr_cnt table that are present in ensembl_genomes (downloaded from Ensembl)
+ # Step1:delete genomes from nr_cnt table that are present in ensembl_genomes (downloaded from Ensembl)
  #it also deletes genomes smaller than 2000 sequences
  perl ./lib/CollectGenomes.pm --mode=get_missing_genomes --tables nr_cnt=nr_ti_gi_fasta_TokuDB_cnt -tbl ensembl_genomes=ensembl_genomes -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=TokuDB
  #Action: table nr_ti_gi_fasta_TokuDB_cnt deleted 21139 rows!
