@@ -3552,6 +3552,8 @@ sub print_nr_genomes {
 	
 	}
 
+	my $nr_genomes = @tis;
+	$log->info("Report: printed $nr_genomes nr genomes to $OUT");
 	$dbh->disconnect;
 
 	return;
@@ -3971,7 +3973,11 @@ sub copy_jgi_genomes {
 	my $rows_up = $dbh->mysql_async_result;
     $log->debug( "Action: update to $TI_FULLLIST updated $rows_up rows!" ) unless $@;
     $log->error( "Action: updating $TI_FULLLIST failed: $@" ) if $@;
-	
+
+	#count genomes coming from JGI
+	my $jgi_cnt = $dbh->selectrow_array("SELECT COUNT(*) FROM $TI_FULLLIST WHERE source = 'JGI'");
+	$log->info("Report: found $jgi_cnt genomes in table:$TI_FULLLIST");
+
 	$sth->finish;
 	$sth_sel->finish;
 	$dbh->disconnect;
@@ -5850,6 +5856,10 @@ For help write:
  [msestak@tiktaalik nr_raw]$ tar -xzvf taxdump.tar.gz
  [msestak@tiktaalik nr_raw]$ rm citations.dmp delnodes.dmp gc.prt merged.dmp gencode.dmp
 
+
+ ### Part IIa -> download genomes from JGI:
+ perl ./lib/CollectGenomes.pm --mode=jgi_download --names=names_raw_2015_9_3_new -tbl gold=gold_ver5 -o /home/msestak/dropbox/Databases/db_02_09_2015/data/xml/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+
  ### Part III -> load nr into database:
  # Step1: load gi_taxid_prot to connect gi from nr and ti from gi_taxid_prot
  perl ./lib/CollectGenomes.pm --mode=gi_taxid -if /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/gi_taxid_prot.dmp.gz -o ./t/nr/ -ho localhost -u msandbox -p msandbox -d nr_2015_9_2 --port=5625 --socket=/tmp/mysql_sandbox5625.sock --engine=TokuDB
@@ -5968,11 +5978,17 @@ For help write:
  #Action: deleted 2 hybrid species from ti_full_list
  #Report: found 26265 genomes in table:ti_full_list
  
- #extract nr genomes after filtering
+ # Step4: extract nr genomes after filtering
  perl ./lib/CollectGenomes.pm --mode=print_nr_genomes -tbl ti_full_list=ti_full_list -tbl nr_ti_fasta=nr_ti_gi_fasta_TokuDB -o /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_genomes/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
- #printed 5195 genomes
+ #printed 5162 genomes
 
- #copy genomes from previous database not in this one
+ # Step5: remove genomes from jgi that are found in nr or ensembl (to jgi_clean directory)
+ perl ./lib/CollectGenomes.pm --mode=copy_jgi_genomes -tbl ti_full_list=ti_full_list -tbl names=names_raw_2015_9_3_new --in=/home/msestak/dropbox/Databases/db_02_09_2015/data/jgi/ --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/jgi_clean/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ # Action: update to ti_full_list updated 220 rows!
+
+
+
+ #copy genomes (external) from previous database not in this one
  perl ./lib/CollectGenomes.pm --mode=copy_external_genomes -tbl ti_full_list=ti_full_list -tbl names=names_raw_2015_9_3_new --in=/home/msestak/dropbox/Databases/db_29_07_15/data/eukarya --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/external/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
  #254 genomes inserted
 
@@ -6001,12 +6017,6 @@ For help write:
  #Action: TORQUE script printed to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps1.pbs
 
  perl ./bin/CollectGenomes.pm --mode=run_cdhit --in=/home/msestak/dropbox/Databases/db_29_07_15/data/cdhit/cd_hit_cmds --out=/home/msestak/dropbox/Databases/db_29_07_15/data/cdhit/ -ho localhost -d nr -u msandbox -p msandbox -po 5622 -s /tmp/mysql_sandbox5622.sock -v
-
- ### Part VII -> download genomes from JGI:
- perl ./lib/CollectGenomes.pm --mode=jgi_download --names=names_raw_2015_9_3_new -tbl gold=gold_ver5 -o /home/msestak/dropbox/Databases/db_02_09_2015/data/xml/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
-
- #remove genomes found in nr or ensembl (jgi_clean directory)
- perl ./lib/CollectGenomes.pm --mode=copy_jgi_genomes -tbl ti_full_list=ti_full_list -tbl names=names_raw_2015_9_3_new --in=/home/msestak/dropbox/Databases/db_02_09_2015/data/jgi/ --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/jgi_clean/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
 
  ALTERNATIVE with Deep:
