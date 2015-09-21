@@ -3843,9 +3843,13 @@ sub copy_external_genomes {
     };
     eval { $dbh->do($up_sp, { async => 1 } ) };
 	my $rows_up = $dbh->mysql_async_result;
-    $log->debug( "Action: update to $TI_FULLLIST updated $rows_up rows!" ) unless $@;
+    $log->debug( "Action: update to $TI_FULLLIST updated $rows_up rows for external" ) unless $@;
     $log->error( "Action: updating $TI_FULLLIST failed: $@" ) if $@;
-	
+
+	#count genomes coming from external
+	my $ext_cnt = $dbh->selectrow_array("SELECT COUNT(*) FROM $TI_FULLLIST WHERE source = 'external'");
+	$log->info("Report: found $ext_cnt external genomes in table:$TI_FULLLIST");
+
 	$sth->finish;
 	$sth_sel->finish;
 	$dbh->disconnect;
@@ -3976,7 +3980,7 @@ sub copy_jgi_genomes {
 
 	#count genomes coming from JGI
 	my $jgi_cnt = $dbh->selectrow_array("SELECT COUNT(*) FROM $TI_FULLLIST WHERE source = 'JGI'");
-	$log->info("Report: found $jgi_cnt genomes in table:$TI_FULLLIST");
+	$log->info("Report: found $jgi_cnt JGI genomes in table:$TI_FULLLIST");
 
 	$sth->finish;
 	$sth_sel->finish;
@@ -5985,11 +5989,11 @@ For help write:
  # Step5: remove genomes from jgi that are found in nr or ensembl (to jgi_clean directory)
  perl ./lib/CollectGenomes.pm --mode=copy_jgi_genomes -tbl ti_full_list=ti_full_list -tbl names=names_raw_2015_9_3_new --in=/home/msestak/dropbox/Databases/db_02_09_2015/data/jgi/ --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/jgi_clean/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
  # Action: update to ti_full_list updated 220 rows!
+ # Report: found 219 JGI genomes in table:ti_full_list
 
-
-
- #copy genomes (external) from previous database not in this one
+ # Step6: copy genomes (external) from previous database not in this one
  perl ./lib/CollectGenomes.pm --mode=copy_external_genomes -tbl ti_full_list=ti_full_list -tbl names=names_raw_2015_9_3_new --in=/home/msestak/dropbox/Databases/db_29_07_15/data/eukarya --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/external/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ # Action: update to ti_full_list updated 168 rows!
  #254 genomes inserted
 
  #delete duplicates from final database
