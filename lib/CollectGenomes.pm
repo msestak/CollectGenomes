@@ -4327,6 +4327,160 @@ sub prepare_cdhit_per_phylostrata {
 	my $ph_backup = create_table_copy( { ORIG => $PHYLO, TO => "${PHYLO}_backup", %{$param_href} } );
 
     #collect all genomes from $IN
+    my @ti_files = File::Find::Rule->file()->name(qr/\A\d+\.ff\z/)->in($IN);   #taxid.ff files created by MakePhyloDb
+	@ti_files = sort @ti_files;
+
+	#clean $OUT dir before use
+	if ( -d $OUT ) {
+            path($OUT)->remove_tree and $log->warn(qq|Action: dir $OUT removed and cleaned|);
+        }
+    path( $OUT )->mkpath and $log->trace(qq|Action: dir $OUT created empty|);
+
+    #create outdir foreach phylostratum and copy genomes from that ps into it
+    DIR:
+    foreach my $ps (@ps_columns) {
+		my $ps_path = path( $OUT, $ps );
+        if ( -d $ps_path ) {
+            path($ps_path)->remove_tree and $log->warn(qq|Action: dir $ps_path removed|);
+        }
+        path( $ps_path )->mkpath and $log->trace(qq|Action: dir $ps_path created|);
+		
+		#if ti in this phylostratum copy it to this ps directory
+        my $select_ti = sprintf( qq{
+		SELECT %s
+		FROM %s
+		WHERE %s = ? },
+            $dbh->quote_identifier($ps), $dbh->quote_identifier($PHYLO), $dbh->quote_identifier($ps)
+        );
+        my $sth = $dbh->prepare($select_ti);
+
+        TAXID:
+        foreach my $ti_file (@ti_files) {
+            my $ti = path($ti_file)->basename;
+			$ti =~ s/\A(\d+)\.ff\z/$1/;
+
+            $sth->execute($ti);
+			#say $select_ti;
+            $sth->bind_col( 1, \my $tax_id, { TYPE => 'integer' } );
+            $sth->fetchrow_arrayref();   #now $tax_id has ti num
+
+            my $taxid_in_ps_dir = path( $ps_path, $ti );
+            if ( -f $taxid_in_ps_dir ) {
+                unlink $taxid_in_ps_dir and $log->warn(qq|Action: genome $taxid_in_ps_dir unlinked|);
+            }
+
+            if ($tax_id) {
+                path($ti_file)->copy($ps_path) and $log->debug(qq|Action: File $ti_file copied to $ps_path|);
+            }
+        }
+
+		#cat all files in one ps
+		my $out_ps_full = path($OUT, $ps . '.fa');
+		if (-f $out_ps_full) {
+			#unlink $out_ps_full and $log->warn(qq|Action: ps_full_file $out_ps_full unlinked|);
+			$log->warn(qq|Action: ps_full_file $out_ps_full exists, it will be appended|);
+		}
+		my @tis_in_psdir = File::Find::Rule->file()->name(qr/\A\d+\z/)->in($ps_path);
+		#my @ti_files = sort @ti_files;
+		if (@tis_in_psdir) {
+			my $cnt_per_ps = @tis_in_psdir;
+			catalanche(\@tis_in_psdir => $out_ps_full); 
+			$log->debug(qq|Action: concatenated $cnt_per_ps files to $out_ps_full|);
+		}
+
+		#clean ps directories
+		if ( -d $ps_path ) {
+            path($ps_path)->remove_tree and $log->warn(qq|Action: dir $ps_path removed|);
+        }
+		
+		#create TORQUE scripts to run cdhit
+		if (-f $out_ps_full) {
+			my $pbs_path = print_pbs_cdhit_script($ps, $out_ps_full);
+			$log->info(qq|Action: TORQUE script printed to $pbs_path|) if $pbs_path;
+		}
+    }
+
+	#run cleanup of $PHYLO table for all phylostrata that have no genomes
+	my @fa_files = File::Find::Rule->file()->name(qr/\Aps\d+\.fa\z/)->in($OUT);
+	#$log->trace("FA_FILES:@fa_files");
+	my @ps_names = map { path($_)->basename } @fa_files;
+	@ps_names = map { /(\Aps\d+)/ } @ps_names;
+	@ps_names = sort @ps_names;
+	$log->trace("PS_NAMES:@ps_names");
+	my %ps_na = map {$_ => undef} @ps_names;
+
+	#say "PS_COLUMNS:@ps_columns";
+	my %ps_col = map {$_ => undef} @ps_columns;
+	my @drop_ps;
+	foreach my $ps_col (sort keys %ps_col) {
+		if (! exists $ps_na{$ps_col}) {
+			push @drop_ps, $ps_col;
+		}
+	}
+	#say "DROP_PS:@drop_ps";
+	my $droplist = join ", ", map { "DROP COLUMN $_" } @drop_ps;
+	#$log->trace( "DROPLIST:$droplist" );
+
+	my $del_list = join " AND ", map { "$_ IS NULL" } @ps_names;
+	#$log->trace("DEL_LIST:$del_list");
+
+	my $alter_q = qq{
+	ALTER TABLE $PHYLO $droplist 
+	};
+	$log->trace("$alter_q");
+	eval{ $dbh->do($alter_q)};
+	$log->error( "Action: altering table $PHYLO failed: $@" ) if $@;
+	$log->info( "Action: table $PHYLO altered:{@drop_ps} dropped" ) unless $@;
+
+	my $del_q = qq{
+	DELETE ph FROM $PHYLO AS ph
+	WHERE $del_list
+	};
+	$log->trace("$del_q");
+	my $del_rows;
+	eval{ $del_rows = $dbh->do($del_q)};
+	$log->error( "Action: deleting table $PHYLO failed: $@" ) if $@;
+	$log->info( "Action: table $PHYLO deleted $del_rows rows" ) unless $@;
+
+    my $rows_left = $dbh->selectrow_array("SELECT COUNT(*) FROM $PHYLO");
+    $log->info("Report: table $PHYLO has $rows_left rows");
+
+    $dbh->disconnect;
+    return;
+
+}
+
+
+sub prepare_cdhit_per_phylostrata_old {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('prepare_cdhit_per_phylostrata() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    my $DATABASE = $param_href->{DATABASE} or $log->logcroak('no $DATABASE specified on command line!');
+    my $IN       = $param_href->{IN}       or $log->logcroak('no $IN specified on command line!');
+    my $OUT      = $param_href->{OUT}      or $log->logcroak('no $OUT specified on command line!');
+    my %TABLES   = %{ $param_href->{TABLES} } or $log->logcroak('no $TABLES specified on command line!');
+    my $PHYLO    = $TABLES{phylo};
+
+    #get new handle
+    my $dbh = dbi_connect($param_href);
+
+    #FIRST: get phylostrata from phylo table for specific organism
+    my $select_ps_columns = qq{
+        SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = '$DATABASE' AND TABLE_NAME = '$PHYLO' AND ORDINAL_POSITION > 1
+    };    #-- skip first column which is id auto_increment
+    my @ps_columns = map { $_->[0] } @{ $dbh->selectall_arrayref($select_ps_columns) };
+	my $ps_num = @ps_columns;
+    $log->debug(qq|Report: $ps_num phylostrata:{@ps_columns}|);
+
+	#make a backup copy of PHYLO table
+	my $ph_copy = create_table_copy( { ORIG => $PHYLO, %{$param_href} } );
+
+	#create copy of copy of $ORIG table (just in case)
+	my $ph_backup = create_table_copy( { ORIG => $PHYLO, TO => "${PHYLO}_backup", %{$param_href} } );
+
+    #collect all genomes from $IN
     my @ti_files = File::Find::Rule->file()->name(qr/\A\d+\z/)->in($IN);
 	@ti_files = sort @ti_files;
 
@@ -6004,9 +6158,10 @@ For help write:
 
  # Step8: merge jgi, nr, external, ensembl genomes to all:
  perl ./lib/CollectGenomes.pm --mode=merge_existing_genomes -o /home/msestak/dropbox/Databases/db_02_09_2015/data/all/ -tbl ti_full_list=ti_full_list -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
- #Copied 26465 genomes to /home/msestak/dropbox/Databases/db_02_09_2015/data/all (43 GB)
+ #Copied 26586 genomes to /home/msestak/dropbox/Databases/db_02_09_2015/data/all (40.2 GB)
 
  ### Part VIII -> prepare and run cd-hit
+ # Step1: partition genomes per phylostrata
  perl ./lib/CollectGenomes.pm --mode=prepare_cdhit_per_phylostrata --in=/home/msestak/dropbox/Databases/db_02_09_2015/data/all/ --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ -tbl phylo=phylo_7955 -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
  #[2015/09/10 14:32:55,739]Report: 34 phylostrata:{ps1 ps2 ps3 ps4 ps5 ps6 ps7 ps8 ps9 ps10 ps11 ps12 ps13 ps14 ps15 ps16 ps17 ps18 ps19 ps20 ps21 ps22 ps23 ps24 ps25 ps26 ps27 ps28 ps29 ps30 ps31 ps32 ps33 ps34}
  #[2015/09/10 14:33:57,226]Action: table phylo_7955_copy inserted 1121881 rows!
@@ -6015,12 +6170,52 @@ For help write:
  #[2015/09/10 14:35:02,088]Action: dir /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit created empty
  #[2015/09/10 14:35:02,088]Action: dir /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps1 created
  #[2015/09/10 14:35:02,171]Action: File /home/msestak/dropbox/Databases/db_02_09_2015/data/all/100053 copied to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps1
- #Action: concatenated 25031 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps1.fa
+ #Action: concatenated 24998 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps1.fa
  #Action: dir /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps1 removed
  #/home/msestak/kclust/cdhit/cd-hit-v4.6.1-2012-08-27/cd-hit -i /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps1.fa -o /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps1 -c 0.9 -n 5 -M 0 -T 0 -d 200
  #Action: TORQUE script printed to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps1.pbs
+ #Action: concatenated 294 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps2.fa
+ #Action: concatenated 14 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps3.fa
+ #Action: concatenated 1 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps4.fa
+ #Action: concatenated 886 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps5.fa
+ #Action: concatenated 2 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps6.fa
+ #Action: concatenated 1 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps7.fa
+ #Action: concatenated 2 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps8.fa
+ #Action: concatenated 7 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps9.fa
+ #Action: concatenated 1 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps10.fa
+ #Action: concatenated 8 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps11.fa
+ #Action: concatenated 135 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps12.fa
+ #Action: concatenated 2 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps13.fa
+ #Action: concatenated 1 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps14.fa
+ #Action: concatenated 3 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps15.fa
+ #Action: concatenated 1 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps16.fa
+ #Action: concatenated 1 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps17.fa
+ #Action: concatenated 167 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps19.fa
+ #Action: concatenated 1 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps22.fa
+ #Action: concatenated 1 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps23.fa
+ #Action: concatenated 1 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps24.fa
+ #Action: concatenated 22 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps25.fa
+ #Action: concatenated 1 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps26.fa
+ #Action: concatenated 2 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps28.fa
+ #Action: concatenated 2 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps32.fa
+ #Action: concatenated 1 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps34.fa
+ #PS_NAMES:ps1 ps10 ps11 ps12 ps13 ps14 ps15 ps16 ps17 ps19 ps2 ps22 ps23 ps24 ps25 ps26 ps28 ps3 ps32 ps34 ps4 ps5 ps6 ps7 ps8 ps9
+ #ALTER TABLE phylo_7955 DROP COLUMN ps18, DROP COLUMN ps20, DROP COLUMN ps21, DROP COLUMN ps27, DROP COLUMN ps29, DROP COLUMN ps30, DROP COLUMN ps31, DROP COLUMN ps33 
+ #Action: table phylo_7955 altered:{ps18 ps20 ps21 ps27 ps29 ps30 ps31 ps33} dropped
+ #DELETE ph FROM phylo_7955 AS ph
+ #WHERE ps1 IS NULL AND ps10 IS NULL AND ps11 IS NULL AND ps12 IS NULL AND ps13 IS NULL AND ps14 IS NULL AND ps15 IS NULL AND ps16 IS NULL AND ps17 IS NULL AND ps19 IS NULL AND ps2 IS NULL AND ps22 IS NULL AND ps23 IS NULL AND ps24 IS NULL AND ps25 IS NULL AND ps26 IS NULL AND ps28 IS NULL AND ps3 IS NULL AND ps32 IS NULL AND ps34 IS NULL AND ps4 IS NULL AND ps5 IS NULL AND ps6 IS NULL AND ps7 IS NULL AND ps8 IS NULL AND ps9 IS NULL
+ #Action: table phylo_7955 deleted 1283 rows
+ #Report: table phylo_7955 has 1120598 rows
 
+ # Step2: run MakePhyloDb to get pgi||ti|pi|| identifiers
+ [msestak@tiktaalik data]$ MakePhyloDb -d ./all/
+
+ # Step3: run cdhit based on cd_hit_cmds file
  perl ./bin/CollectGenomes.pm --mode=run_cdhit --in=/home/msestak/dropbox/Databases/db_29_07_15/data/cdhit/cd_hit_cmds --out=/home/msestak/dropbox/Databases/db_29_07_15/data/cdhit/ -ho localhost -d nr -u msandbox -p msandbox -po 5622 -s /tmp/mysql_sandbox5622.sock -v
+
+
+
+
 
 
  ALTERNATIVE with Deep:
