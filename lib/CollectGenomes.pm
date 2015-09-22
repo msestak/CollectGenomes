@@ -4187,6 +4187,121 @@ sub merge_existing_genomes {
 	#get new handle
     my $dbh = dbi_connect($param_href);
 
+	#work on all other sequences
+	#get all tax_ids in TI_FULLLIST
+	#(all larger than 99 - Centos6 and Boost issue) in MakePhyloDb
+    my $tis_query = qq{
+    SELECT ti, source
+    FROM $TI_FULLLIST
+	WHERE ti > 99
+    ORDER BY ti
+    };
+    my %tis_with_source = map { $_->[0] => $_->[1] } @{ $dbh->selectall_arrayref($tis_query) };
+
+	#clean $OUT dir before use
+	if ( -d $OUT ) {
+            path($OUT)->remove_tree and $log->warn(qq|Action: dir $OUT removed and cleaned|);
+        }
+    path( $OUT )->mkpath and $log->trace(qq|Action: dir $OUT created empty|);
+
+
+	#SECOND PART: copy to $OUT (to all dir) if found in TI_FULLLIST table
+	my $jgi_cnt = 0;
+	my $nr_cnt = 0;
+	my $ext_cnt = 0;
+	my $ens_cnt = 0;
+	foreach my $ti ( keys %tis_with_source ) {
+		$log->trace( "Action: working on $ti" );
+
+		my $ti_in_source_dir;
+		foreach ($tis_with_source{$ti}) {
+			when ('JGI') {
+				$ti_in_source_dir = path(path($OUT)->parent, 'jgi_clean', $ti)->canonpath;
+
+				#delete ti_files (genomes) if they exist in $OUT dir
+				my $end_ti_file = path($OUT, $ti);
+				if (-f $end_ti_file) {
+					unlink $end_ti_file and $log->error( "Action: file $end_ti_file unlinked" );
+				}
+
+				#copy them from in_dir to $OUT
+            	path($ti_in_source_dir)->copy($OUT) and $log->debug( "Action: file $ti_in_source_dir copied to $end_ti_file" );
+				$jgi_cnt++;
+			};
+			when ('NCBI') {
+				$ti_in_source_dir = path(path($OUT)->parent, 'nr_genomes', $ti)->canonpath;
+
+				#delete ti_files (genomes) if they exist in $OUT dir
+				my $end_ti_file = path($OUT, $ti);
+				if (-f $end_ti_file) {
+					unlink $end_ti_file and $log->error( "Action: file $end_ti_file unlinked" );
+				}
+
+				#copy them from in_dir to $OUT
+            	path($ti_in_source_dir)->copy($OUT) and $log->debug( "Action: file $ti_in_source_dir copied to $end_ti_file" );
+				$nr_cnt++;
+			};
+			when ('external') {
+				$ti_in_source_dir = path(path($OUT)->parent, 'external', $ti)->canonpath;
+
+				#delete ti_files (genomes) if they exist in $OUT dir
+				my $end_ti_file = path($OUT, $ti);
+				if (-f $end_ti_file) {
+					unlink $end_ti_file and $log->error( "Action: file $end_ti_file unlinked" );
+				}
+
+				#copy them from in_dir to $OUT
+            	path($ti_in_source_dir)->copy($OUT) and $log->debug( "Action: file $ti_in_source_dir copied to $end_ti_file" );
+				$ext_cnt++;
+			};
+			when ('Ensembl') {
+				$ti_in_source_dir = path(path($OUT)->parent, 'ensembl_all', $ti)->canonpath;
+
+				#delete ti_files (genomes) if they exist in $OUT dir
+				my $end_ti_file = path($OUT, $ti);
+				if (-f $end_ti_file) {
+					unlink $end_ti_file and $log->error( "Action: file $end_ti_file unlinked" );
+				}
+
+				#copy them from in_dir to $OUT
+            	path($ti_in_source_dir)->copy($OUT) and $log->debug( "Action: file $ti_in_source_dir copied to $end_ti_file" );
+				$ens_cnt++;
+			};
+			default { $log->warn( "Action: tax_id $ti not found in source directories" ); };
+
+
+		}   #end foreach when
+
+	}
+
+	$log->info("Copied $jgi_cnt JGI genomes to $OUT");
+	$log->info("Copied $nr_cnt NCBI genomes to $OUT");
+	$log->info("Copied $ext_cnt external genomes to $OUT");
+	$log->info("Copied $ens_cnt Ensembl genomes to $OUT");
+	$dbh->disconnect;
+
+	return;
+}
+
+
+sub merge_existing_genomes_old {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak( 'merge_existing_genomes() needs a $param_href' ) unless @_ == 1;
+    my ( $param_href ) = @_;
+
+	my $DATABASE = $param_href->{DATABASE} or $log->logcroak( 'no $DATABASE specified on command line!' );
+	my $OUT      = $param_href->{OUT}      or $log->logcroak( 'no $OUT specified on command line!' );
+    my %TABLES   = %{ $param_href->{TABLES} } or $log->logcroak('no $TABLES specified on command line!');
+    my $TI_FULLLIST = $TABLES{ti_full_list};
+	my $nr_dir   = path(path($OUT)->parent, 'nr_genomes');
+	my $ens_dir  = path(path($OUT)->parent, 'ensembl_all');
+	my $jgi_dir  = path(path($OUT)->parent, 'jgi_clean');
+	my $ext_dir  = path(path($OUT)->parent, 'external');
+
+			
+	#get new handle
+    my $dbh = dbi_connect($param_href);
+
 	#check if genomes larger than 30_000 seq and offer to delete from ti_full_list table
     my $sel_large = qq{
 	SELECT ti, genes_cnt, species_name, source
