@@ -820,10 +820,10 @@ sub ftp_get_proteome {
 					my $header = $1;
 	
 					my $fasta_seq = $2;
-	    			$fasta_seq =~ s/\R//g;  #delete multiple newlines (also forgets %+ hash)
-					$fasta_seq =~ s/[+* -._]//g;
-					$fasta_seq =~ s/\d+//;
+	    			$fasta_seq =~ s/\R//g;  #delete multiple newlines
 					$fasta_seq = uc $fasta_seq;
+					$fasta_seq =~ tr{*}{J};
+					$fasta_seq =~ tr{A-Z}{}dc;
 	  
 	    			print $genome_ti_fh ('>', $header, "\n", $fasta_seq, "\n");
 				}
@@ -976,9 +976,9 @@ sub ftp_get_pre {
 	
 					my $fasta_seq = $2;
 	    			$fasta_seq =~ s/\R//g;  #delete multiple newlines (also forgets %+ hash)
-					$fasta_seq =~ s/[+* -._]//g;
-					$fasta_seq =~ s/\d+//;
 					$fasta_seq = uc $fasta_seq;
+					$fasta_seq =~ tr{*}{J};
+					$fasta_seq =~ tr{A-Z}{}dc;
 	  
 	    			print $genome_ti_fh ('>', $header, "\n", $fasta_seq, "\n");
 				}
@@ -1068,10 +1068,10 @@ sub get_raw_fasta {
                 my $header = $1;
 
                 my $fasta_seq = $2;
-                $fasta_seq =~ s/\R//g;    #delete multiple newlines (also forgets %+ hash)
-                $fasta_seq =~ s/[+* -._]//g;
-                $fasta_seq =~ s/\d+//;
+                $fasta_seq =~ s/\R//g;       #delete multiple newlines (also forgets %+ hash)
                 $fasta_seq = uc $fasta_seq;
+                $fasta_seq =~ tr{*}{J};      #replace * with J for cd-hit
+                $fasta_seq =~ tr{A-Z}{}dc;   #replace all chars that are not in A-Z range
 
                 print $genome_ti_fh ( '>', $header, "\n", $fasta_seq, "\n" );
             }
@@ -1417,10 +1417,10 @@ sub extract_and_load_nr {
 				#first get entire header + fasta
 				my ($header_long, $fasta) = $_ =~ m{\A([^\n].+?)\n(.+)\z}sx;
 				#remove illegal chars from fasta and upercase it
-			    $fasta =~ s/\R//g;  #delete multiple newlines (all vertical and horizontal space)
-			    $fasta =~ tr{A-Za-z}{}dc;  #delete all special characters
-				$fasta =~ s/\d+//;
-				$fasta = uc $fasta;
+			    $fasta =~ s/\R//g;      #delete multiple newlines (all vertical and horizontal space)
+				$fasta = uc $fasta;     #uppercase fasta
+			    $fasta =~ tr{*}{J};     #replace *(stop codon) with J (not used in BLOSSUM62) for cd-hit (return after cd-hit)
+			    $fasta =~ tr{A-Z}{}dc;  #delete all special characters (all not in A-Z)
 				$header_long =~ s/\|\|/\|/g;
 				$header_long = 'gi' . $header_long;   #gi removed as record separator (return it back)
 
@@ -4048,10 +4048,10 @@ sub collect_fasta_print {
 			$line_count++;
 			my $header = $1;
 			my $fasta_seq = $2;
-			$fasta_seq =~ s/\d+//;         #delete all numbers
 			$fasta_seq =~ s/\R//g;         #delete all vertical and horizontal space
 			$fasta_seq = uc $fasta_seq;    #to uppercase
-			$fasta_seq =~ tr{A-Za-z}{}dc;  #delete all special characters
+			$fasta_seq =~ tr{*}{J};        #change * to J for cd-hit
+			$fasta_seq =~ tr{A-Z}{}dc;  #delete all special characters
 			#c Complement the SEARCHLIST.
 			#d Delete found but unreplaced characters.
 
