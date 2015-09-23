@@ -90,15 +90,7 @@ main() if ! caller() or (caller)[0] eq 'DB';
 sub main {
     croak 'main() does not need parameters' unless @_ == 0;
 
-	#start logging first so it captures capturing of parameters too
-    init_logging();
-    ##########################
-    # ... in some function ...
-    ##########################
-    my $log = Log::Log4perl::get_logger("main");
-    # Logs both to Screen and File appender
-    $log->info("This is start of logging for $0");
-
+    #first capture parameters to enable VERBOSE flag for logging
     my ($param_href) = get_parameters_from_cmd();
 
     #preparation of parameters
@@ -116,7 +108,16 @@ sub main {
     my $SOCKET   = $param_href->{SOCKET};
     my $TAX_ID   = $param_href->{TAX_ID};
     my $VERBOSE  = $param_href->{VERBOSE};
-	
+
+	#start logging for the rest of program (without capturing of parameters)
+    init_logging($VERBOSE);
+    ##########################
+    # ... in some function ...
+    ##########################
+    my $log = Log::Log4perl::get_logger("main");
+    # Logs both to Screen and File appender
+    $log->info("This is start of logging for $0");
+
     #get dump of param_href if -v (VERBOSE) flag is on (for debugging)
     my $dump_print = sprintf( Dumper($param_href) ) if $VERBOSE;
     $log->debug( '$param_href = ', "$dump_print" ) if $VERBOSE;
@@ -196,20 +197,19 @@ sub main {
 # See Also   : init_logging()
 sub get_parameters_from_cmd {
 
-    #start logger
-    my $log = Log::Log4perl::get_logger("main");
+    #no logger here
 
-    #print TRACE of command line arguments
-    $log->trace( 'My @ARGV: {', join( "} {", @ARGV ), '}', "\n" );
+    #print command line arguments
+    print 'My @ARGV: {', join( "} {", @ARGV ), '}', "\n";
 	#<<< notidy
     my ($help,  $man,      @MODE,
 		$NODES, $NAMES,    %TABLES,   $ORG,      $TAX_ID, $MAP,
-		$OUT,   $IN,       $OUTFILE, $INFILE,
-        $HOST,  $DATABASE, $USER,    $PASSWORD, $PORT,   $SOCKET, $CHARSET, $ENGINE,
-		$REMOTE_HOST,      $REMOTE_DIR,         $REMOTE_FILE,
+		$OUT,   $IN,       $OUTFILE,  $INFILE,
+        $HOST,  $DATABASE, $USER,     $PASSWORD, $PORT,   $SOCKET, $CHARSET, $ENGINE,
+		$REMOTE_HOST,      $REMOTE_DIR,          $REMOTE_FILE,
     );
 	#>>>
-    my $VERBOSE = '';    #default false (silent)
+    my $VERBOSE = 0;    #default false (silent or here INFO log level)
 
     GetOptions(
         'help|h'           => \$help,
@@ -236,38 +236,37 @@ sub get_parameters_from_cmd {
         'socket|S=s'       => \$SOCKET,
         'charset|c=s'      => \$CHARSET,
         'engine|en=s'      => \$ENGINE,
-        'verbose|v'        => \$VERBOSE,       #flag
+        'verbose+'      => \$VERBOSE,       #flag
     ) or pod2usage( -verbose => 1 );
 
-    $log->trace("Printing {@MODE} before");
+    say "Printing {@MODE} before";
     @MODE = split( /,/, join( ',', @MODE ) );
-    $log->trace("Printing {@MODE} after");
+    say "Printing {@MODE} after";
 
     pod2usage( -verbose => 1 ) if $help;
     pod2usage( -verbose => 2 ) if $man;
 
-    $log->fatal('No @MODE specified on command line') unless @MODE;
-	#pod2usage( -verbose => 1 ) unless @MODE;
+    die 'No @MODE specified on command line' unless @MODE;
 
     if ($OUT) {
-        $log->trace( 'My output path: ', path($OUT) );
+        say 'My output path: ', path($OUT);
         $OUT = path($OUT)->absolute->canonpath;
-        $log->trace( 'My absolute output path: ', path($OUT) );
+        say 'My absolute output path: ', path($OUT);
     }
     if ($IN) {
-        $log->trace( 'My input path: ', path($IN) );
+        say 'My input path: ', path($IN);
         $IN = path($IN)->absolute->canonpath;
-        $log->trace( 'My absolute input path: ', path($IN) );
+        say 'My absolute input path: ', path($IN);
     }
     if ($OUTFILE) {
-        $log->trace( 'My output file: ', path($OUTFILE) );
+        say 'My output file: ', path($OUTFILE);
         $OUTFILE = path($OUTFILE)->absolute->canonpath;
-        $log->trace( 'My absolute output file: ', path($OUTFILE) );
+        say 'My absolute output file: ', path($OUTFILE);
     }
     if ($INFILE) {
-        $log->trace( 'My input file: ', path($INFILE) );
+        say 'My input file: ', path($INFILE);
         $INFILE = path($INFILE)->absolute->canonpath;
-        $log->trace( 'My absolute input file: ', path($INFILE) );
+        say 'My absolute input file: ', path($INFILE);
     }
 
     return (
@@ -308,38 +307,48 @@ sub get_parameters_from_cmd {
 # Comments   : used to setup a logging framework
 # See Also   : Log::Log4perl at https://metacpan.org/pod/Log::Log4perl
 sub init_logging {
-    croak 'init_logging() does not need parameters' unless @_ == 0;
+    croak 'init_logging() needs VERBOSE parameter' unless @_ == 1;
+    my ($VERBOSE) = @_;
 
-		#create log file in same dir where script is running
-	my $dir_out      = path($0)->parent->absolute;                   #removes perl script and takes absolute path from rest of path
-		#say '$dir_out:', $dir_out;
-	my ($app_name) = path($0)->basename =~ m{\A(.+)\.(?:.+)\z};   #takes name of the script and removes .pl or .pm or .t
-		#say '$app_name:', $app_name;
-	my $logfile = path($dir_out, $app_name . '.log')->canonpath;     #combines all of above with .log
-		#say '$logfile:', $logfile;
-	
-=for Regexes:
+    #create log file in same dir where script is running
+    my $dir_out = path($0)->parent->absolute;    #removes perl script and takes absolute path from rest of path
+    #say '$dir_out:', $dir_out;
+    my ($app_name) = path($0)->basename =~ m{\A(.+)\.(?:.+)\z};   #takes name of the script and removes .pl or .pm or .t
+    #say '$app_name:', $app_name;
+    my $logfile = path( $dir_out, $app_name . '.log' )->canonpath;    #combines all of above with .log
+    #say '$logfile:', $logfile;
+
+=for Regex_debugging:
     # comment previous 3 lines when debugging regexes with Regexp::Debugger to disable this regex
 	# and add this line instead
     my $logfile = 'collect_genomes_to_database.log'; 
 	
 =cut
 
-	#colored output on windows
-	my $osname = $^O;
-	if ($osname eq 'MSWin32') {
-		require Win32::Console::ANSI;    #require needs import
-		Win32::Console::ANSI->import();
-	}
+    #colored output on windows
+    my $osname = $^O;
+    if ( $osname eq 'MSWin32' ) {
+        require Win32::Console::ANSI;                                 #require needs import
+        Win32::Console::ANSI->import();
+    }
 
-	#levels:
+    #enable different levels based on VERBOSE flag
+    my $log_level;
+    foreach ($VERBOSE) {
+        when (0) { $log_level = 'INFO'; }
+        when (1) { $log_level = 'DEBUG'; }
+        when (2) { $log_level = 'TRACE'; }
+        default  { $log_level = 'INFO'; }
+    }
+
+    #levels:
     #TRACE, DEBUG, INFO, WARN, ERROR, FATAL
-	###############################################################################
-	#                              Log::Log4perl Conf                             #
-	###############################################################################
+    ###############################################################################
+    #                              Log::Log4perl Conf                             #
+    ###############################################################################
     # Configuration in a string ...
     my $conf = qq(
-      log4perl.category.main              = TRACE, Logfile, Screen
+      log4perl.category.main              = $log_level, Logfile, Screen
      
       log4perl.appender.Logfile           = Log::Log4perl::Appender::File
       log4perl.appender.Logfile.filename  = $logfile
@@ -355,12 +364,13 @@ sub init_logging {
       log4perl.appender.Screen.layout     = Log::Log4perl::Layout::PatternLayout
       log4perl.appender.Screen.layout.ConversionPattern  = [%d{yyyy/MM/dd HH:mm:ss,SSS}]%m%n
     );
- 
+
     # ... passed as a reference to init()
     Log::Log4perl::init( \$conf );
 
     return;
 }
+
 
 ## INTERNAL UTILITY ###
 # Usage      : dbi_connect();
@@ -3594,18 +3604,21 @@ sub make_db_dirs {
       data/xml
       data/external
       data/all
+      data/all_ff
       data/cdhit
       doc
       src
 	  };
 
+	$log->trace("All dirs:@dirs");
+
     foreach my $dir (@dirs) {
         my $path_dir = path( $OUT, $dir )->canonpath;
         if ( -d $path_dir ) {
-            $log->warn("Report: $path_dir already exists");
+            $log->warn("Report: $path_dir already exists. Not overwritten.");
         }
         else {
-            path($path_dir)->mkpath( { chmod => 0777 } ) and $log->debug("Action: created $path_dir");
+            path($path_dir)->mkpath( { chmod => 0777 } ) and $log->info("Action: created $path_dir");
         }
     }
 
@@ -4880,7 +4893,7 @@ sub run_cdhit {
 					$log->error(qq|Report: some sequences skipped because of errors|);
 				}
 
-				$log->info(qq|Action: cd-hit for $ps finished (INPUT:$input_seqs2 sequences and OUT:$clusters clusters)\nMemory used:$memory_used M\nTotal CPU time: $cpu_time|);
+				$log->info(qq|Action: cd-hit for $ps finished (INPUT:$input_seqs2 sequences and OUT:$clusters clusters)\nMemory used:${memory_used}M\nTotal CPU time: $cpu_time sec|);
 
 			}
 			else {
