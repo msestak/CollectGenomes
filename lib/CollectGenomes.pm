@@ -4495,7 +4495,7 @@ sub prepare_cdhit_per_phylostrata {
 			#unlink $out_ps_full and $log->warn(qq|Action: ps_full_file $out_ps_full unlinked|);
 			$log->warn(qq|Action: ps_full_file $out_ps_full exists, it will be appended|);
 		}
-		my @tis_in_psdir = File::Find::Rule->file()->name(qr/\A\d+\z/)->in($ps_path);
+		my @tis_in_psdir = File::Find::Rule->file()->name(qr/\A\d+\.ff\z/)->in($ps_path);
 		#my @ti_files = sort @ti_files;
 		if (@tis_in_psdir) {
 			my $cnt_per_ps = @tis_in_psdir;
@@ -6272,8 +6272,13 @@ For help write:
  #Report: found 26589 genomes in table:ti_full_list
 
  # Step8: merge jgi, nr, external, ensembl genomes to all:
+ # it deletes genomes with taxid < 100 because of Centos6 kernel Boost issue in MakePhyloDb
  perl ./lib/CollectGenomes.pm --mode=merge_existing_genomes -o /home/msestak/dropbox/Databases/db_02_09_2015/data/all/ -tbl ti_full_list=ti_full_list -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
  #Copied 26586 genomes to /home/msestak/dropbox/Databases/db_02_09_2015/data/all (40.2 GB)
+ #Copied 214 JGI genomes to /home/msestak/dropbox/Databases/db_02_09_2015/data/all
+ #Copied 5147 NCBI genomes to /home/msestak/dropbox/Databases/db_02_09_2015/data/all
+ #Copied 145 external genomes to /home/msestak/dropbox/Databases/db_02_09_2015/data/all
+ #Copied 21067 Ensembl genomes to /home/msestak/dropbox/Databases/db_02_09_2015/data/all
 
  ### Part VIII -> prepare and run cd-hit
  # Step1: partition genomes per phylostrata
