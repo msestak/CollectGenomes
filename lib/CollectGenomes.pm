@@ -6283,7 +6283,7 @@ For help write:
  #Copied 21067 Ensembl genomes to /home/msestak/dropbox/Databases/db_02_09_2015/data/all
 
  ### Part VIII -> prepare and run cd-hit
- # Step1: run MakePhyloDb to get pgi||ti|pi|| identifiers
+ # Step1: run MakePhyloDb to get pgi||ti|pi|| identifiers (7h)
  [msestak@tiktaalik data]$ MakePhyloDb -d ./all2/
 
  # Step2: partition genomes per phylostrata
@@ -6333,8 +6333,50 @@ For help write:
  #Report: table phylo_7955 has 1120598 rows
 
  # Step3: run cdhit based on cd_hit_cmds file
- perl ./lib/CollectGenomes.pm --mode=run_cdhit --if=/home/msestak/dropbox/Databases/db_29_07_15/data/cdhit/cd_hit_cmds --out=/home/msestak/dropbox/Databases/db_29_07_15/data/cdhit/ -ho localhost -d nr_2015_9_2  -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v
+ perl ./lib/CollectGenomes.pm --mode=run_cdhit --if=/home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/cd_hit_cmds --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ -ho localhost -d nr_2015_9_2  -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v
 
+
+ # Step4: analyze database
+ [msestak@tiktaalik data]$ AnalysePhyloDb -d ./all2/ -t 7955 -n ./nr_raw/nodes_raw_2015_9_3.new > analyze_26575_genomes_danio
+ [msestak@tiktaalik data]$ grep "<ps>" analyze_26575_genomes_danio 
+ #<ps>	1	22625	131567
+ #<ps>	2	223	2759
+ #<ps>	3	12	1708629
+ #<ps>	4	1	1708631
+ #<ps>	5	774	33154
+ #<ps>	6	2	1708671
+ #<ps>	7	1	1708672
+ #<ps>	8	2	1708673
+ #<ps>	9	7	33208
+ #<ps>	10	1	6072
+ #<ps>	11	8	1708696
+ #<ps>	12	116	33213
+ #<ps>	13	2	33511
+ #<ps>	14	1	7711
+ #<ps>	15	2	1708690
+ #<ps>	16	1	7742
+ #<ps>	17	1	7776
+ #<ps>	18	0	117570
+ #<ps>	19	121	117571
+ #<ps>	20	0	7898
+ #<ps>	21	0	186623
+ #<ps>	22	1	41665
+ #<ps>	23	1	32443
+ #<ps>	24	1	1489341
+ #<ps>	25	16	186625
+ #<ps>	26	1	186634
+ #<ps>	27	0	32519
+ #<ps>	28	2	186626
+ #<ps>	29	0	186627
+ #<ps>	30	0	7952
+ #<ps>	31	0	30727
+ #<ps>	32	0	7953
+ #<ps>	33	0	7954
+ #<ps>	34	1	7955
+ [msestak@tiktaalik data]$ grep "<ps>" analyze_26575_genomes_danio > analyze_26575_genomes_danio.ps
+ [msestak@tiktaalik data]$ grep -P "^\d+\t" analyze_26575_genomes_danio > analyze_26575_genomes_danio.genomes
+ [msestak@tiktaalik data]$ wc -l analyze_26575_genomes_danio.genomes 
+ #23923 analyze_26575_genomes_danio.genomes
 
 
 
