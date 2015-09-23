@@ -4869,16 +4869,18 @@ sub run_cdhit {
 		my ($stdout_cd, $stderr_cd, $exit_cd) = capture_output( $cmd, $param_href );
 			if ($exit_cd == 0) {
 				my @lines = split("\n", $stdout_cd);
-				my ($input_seqs1, $input_seqs2, $clusters);
+				my ($input_seqs1, $input_seqs2, $clusters, $memory_used, $cpu_time);
 				for (@lines) {
 					when (m/\Atotal seq:\s+(\d+)/) {$input_seqs1 = $1;}
 					when (m/(\d+)\s+finished\s+(\d+)\s+clusters/) { $input_seqs2 = $1; $clusters = $2;}
+					when (m/\AApprixmated maximum memory consumption:\s+(\d+)/) {$memory_used = $1;}
+					when (m/\ATotal CPU time\s+(\d+\.\d+)/) {$cpu_time = $1;}
 				}
 				if ($input_seqs1 != $input_seqs2) {
 					$log->error(qq|Report: some sequences skipped because of errors|);
 				}
 
-				$log->trace(qq|Action: cd-hit for $ps finished (INPUT:$input_seqs2 sequences and OUT:$clusters clusters)|);
+				$log->info(qq|Action: cd-hit for $ps finished (INPUT:$input_seqs2 sequences and OUT:$clusters clusters)\nMemory used:$memory_used M\nTotal CPU time: $cpu_time|);
 
 			}
 			else {
@@ -6281,7 +6283,10 @@ For help write:
  #Copied 21067 Ensembl genomes to /home/msestak/dropbox/Databases/db_02_09_2015/data/all
 
  ### Part VIII -> prepare and run cd-hit
- # Step1: partition genomes per phylostrata
+ # Step1: run MakePhyloDb to get pgi||ti|pi|| identifiers
+ [msestak@tiktaalik data]$ MakePhyloDb -d ./all2/
+
+ # Step2: partition genomes per phylostrata
  perl ./lib/CollectGenomes.pm --mode=prepare_cdhit_per_phylostrata --in=/home/msestak/dropbox/Databases/db_02_09_2015/data/all/ --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ -tbl phylo=phylo_7955 -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
  #[2015/09/10 14:32:55,739]Report: 34 phylostrata:{ps1 ps2 ps3 ps4 ps5 ps6 ps7 ps8 ps9 ps10 ps11 ps12 ps13 ps14 ps15 ps16 ps17 ps18 ps19 ps20 ps21 ps22 ps23 ps24 ps25 ps26 ps27 ps28 ps29 ps30 ps31 ps32 ps33 ps34}
  #[2015/09/10 14:33:57,226]Action: table phylo_7955_copy inserted 1121881 rows!
@@ -6327,11 +6332,9 @@ For help write:
  #Action: table phylo_7955 deleted 1283 rows
  #Report: table phylo_7955 has 1120598 rows
 
- # Step2: run MakePhyloDb to get pgi||ti|pi|| identifiers
- [msestak@tiktaalik data]$ MakePhyloDb -d ./all/
-
  # Step3: run cdhit based on cd_hit_cmds file
- perl ./bin/CollectGenomes.pm --mode=run_cdhit --in=/home/msestak/dropbox/Databases/db_29_07_15/data/cdhit/cd_hit_cmds --out=/home/msestak/dropbox/Databases/db_29_07_15/data/cdhit/ -ho localhost -d nr -u msandbox -p msandbox -po 5622 -s /tmp/mysql_sandbox5622.sock -v
+ perl ./lib/CollectGenomes.pm --mode=run_cdhit --if=/home/msestak/dropbox/Databases/db_29_07_15/data/cdhit/cd_hit_cmds --out=/home/msestak/dropbox/Databases/db_29_07_15/data/cdhit/ -ho localhost -d nr_2015_9_2  -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v
+
 
 
 
