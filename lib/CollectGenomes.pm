@@ -72,6 +72,7 @@ our @EXPORT_OK = qw{
 	ensembl_ftp_vertebrates
 	prepare_cdhit_per_phylostrata
 	run_cdhit
+	cdhit_merge
 	
 	};
 
@@ -162,6 +163,7 @@ sub main {
         ensembl_ftp                   => \&ensembl_ftp,
         prepare_cdhit_per_phylostrata => \&prepare_cdhit_per_phylostrata,
         run_cdhit                     => \&run_cdhit,
+		cdhit_merge                   => \&cdhit_merge,
 
     );
 
@@ -3603,8 +3605,9 @@ sub make_db_dirs {
       data/jgi_clean
       data/xml
       data/external
-      data/all
-      data/all_ff
+      data/all_raw
+      data/all_sync
+      data/all_ff_final
       data/cdhit
       doc
       src
@@ -4509,9 +4512,9 @@ sub prepare_cdhit_per_phylostrata {
 			$log->warn(qq|Action: ps_full_file $out_ps_full exists, it will be appended|);
 		}
 		my @tis_in_psdir = File::Find::Rule->file()->name(qr/\A\d+\.ff\z/)->in($ps_path);
+		my $cnt_per_ps = @tis_in_psdir;
 		#my @ti_files = sort @ti_files;
 		if (@tis_in_psdir) {
-			my $cnt_per_ps = @tis_in_psdir;
 			catalanche(\@tis_in_psdir => $out_ps_full); 
 			$log->debug(qq|Action: concatenated $cnt_per_ps files to $out_ps_full|);
 		}
@@ -4522,9 +4525,14 @@ sub prepare_cdhit_per_phylostrata {
         }
 		
 		#create TORQUE scripts to run cdhit
-		if (-f $out_ps_full) {
+		if ((-f $out_ps_full) and ($cnt_per_ps > 10)) {
 			my $pbs_path = print_pbs_cdhit_script($ps, $out_ps_full);
 			$log->info(qq|Action: TORQUE script printed to $pbs_path|) if $pbs_path;
+		}
+		else {
+			$log->warn(qq|Report: $ps has $cnt_per_ps genomes and is excluded for cdhit|);
+			my $like_cdhit_name = path($OUT, $ps);
+			path($out_ps_full)->move($like_cdhit_name) and $log->debug(qq|Action: File $out_ps_full renamed to $like_cdhit_name|);
 		}
     }
 
@@ -5985,6 +5993,112 @@ sub curl_genomes {
 
 
 
+### INTERFACE SUB ###
+# Usage      : cdhit_merge( $param_href );
+# Purpose    : it merges all cdhit output files into one BLAST db
+# Returns    : nothing
+# Parameters : ( $param_href ) $IN and $OUTFILE
+# Throws     : 
+# Comments   : it replaces J to * in fasta file
+# See Also   : prepare_cdhit() and run_cdhit()
+sub cdhit_merge {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('cdhit_merge() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    my $IN      = $param_href->{IN}      or $log->logcroak('no $IN specified on command line!');
+    my $OUT     = $param_href->{OUT}     or $log->logcroak('no $OUT specified on command line!');
+    my $OUTFILE = $param_href->{OUTFILE} or $log->logcroak('no $OUTFILE specified on command line!');
+
+	#delete and create $OUT
+	if ( -d $OUT ) {
+            path($OUT)->remove_tree and $log->trace(qq|Action: dir $OUT removed and cleaned|);
+        }
+    path( $OUT )->mkpath and $log->trace(qq|Action: dir $OUT created empty|);
+
+    #collect all cdhit output files
+    my @cdhit_in = File::Find::Rule->file()->name(qr/\Aps\d+\z/)->in($IN);
+	#say "@cdhit_in";
+
+	#open $OUTFILE for writing (delete if it exists because it appends
+	if (-f $OUTFILE) {
+		unlink $OUTFILE and $log->warn("Action: $OUTFILE exists. Unlinked!");
+	}
+    open my $fasta_all_fh, ">>", $OUTFILE or $log->logdie("Error: can't open or write to file:$OUTFILE $!");
+
+	#hash of arefs to store full database and print it later
+	my %db_fasta;
+
+    #read each file, count fasta and append to OUTFILE
+    my $total_cnt = 0;
+    foreach my $ps_file (@cdhit_in) {
+        open my $in_fh,        "<",  $ps_file or $log->logdie("Error: can't open or read to file:$ps_file $!");
+
+		FASTA: {
+            #look in larger chunks between records
+            local $/ = ">";
+            my $line_cnt = 0;
+            while (<$in_fh>) {
+                chomp;
+
+                if (m{\A(pgi\|\d+\|ti\|(\d+)\|(?:[^\v]+))        #pgi id till vertical whitespace
+						\v                #vertical space
+						(.+)}xs           #fasta seq (everything after first vertical space (multiline mode=s)
+                   ) {
+
+                    $line_cnt++;
+                    my $header    = $1;
+					my $full_header = '>' . $header;   #needed for db_fasta
+					my $ti = $2;
+                    my $fasta_seq = $3;
+                    $fasta_seq =~ s/\R//g;         #delete all vertical and horizontal space
+                    $fasta_seq = uc $fasta_seq;    #to uppercase
+                    $fasta_seq =~ tr{J}{*};        #return J to * for BLAST
+
+                    print $fasta_all_fh ( '>', $header, "\n", $fasta_seq, "\n" );
+
+					#push fasta into hash
+					#$db_fasta{$ti} = [ $full_header . "\n" . $fasta_seq ];
+					#$db_fasta{$ti} = [ ];
+					push @{ $db_fasta{$ti} }, $full_header . "\n" . $fasta_seq . "\n";
+					#say Dumper(\%db_fasta);
+
+					#say Dumper(@{ $db_fasta{$ti} });
+
+					#exit if $. > 10;
+
+                }
+            }    #end while
+
+            if ($line_cnt) {
+                $log->debug(qq|Action: read cdhit fasta file:$ps_file with $line_cnt lines and appended to $OUTFILE|);
+                $total_cnt += $line_cnt;
+            }
+        }   #end FASTA
+    }    #end foreach printing fasta
+
+    $log->info("Report: printed $total_cnt lines to $OUTFILE");
+
+	#print all genomes to $OUT
+	foreach my $ti_h (keys %db_fasta) {
+		my $ti_path = path($OUT, $ti_h)->canonpath;
+		open my $ti_fh, ">", $ti_path or $log->logdie("Error: can't open $ti_path for writing:$!");
+		say {$ti_fh} @{ $db_fasta{$ti_h} };
+		$log->trace("Action: written to $ti_path");
+	}
+
+	my $ti_cnt = keys %db_fasta;
+	$log->info("Report: printed $ti_cnt genomes to $OUT");
+
+    return;
+}
+
+
+
+
+
+
+
 
 
 
@@ -6296,11 +6410,45 @@ For help write:
  #Copied 21067 Ensembl genomes to /home/msestak/dropbox/Databases/db_02_09_2015/data/all
 
  ### Part VIII -> prepare and run cd-hit
- # Step1: run MakePhyloDb to get pgi||ti|pi|| identifiers (7h)
- [msestak@tiktaalik data]$ MakePhyloDb -d ./all2/
+ # Step1: run MakePhyloDb to get pgi||ti|pi|| identifiers (7h) and .ff extension
+ [msestak@tiktaalik data]$ cp ./all_raw/ ./all_sync/
+ [msestak@tiktaalik data]$ MakePhyloDb -d ./all_sync/
 
- # Step2: partition genomes per phylostrata
- perl ./lib/CollectGenomes.pm --mode=prepare_cdhit_per_phylostrata --in=/home/msestak/dropbox/Databases/db_02_09_2015/data/all/ --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ -tbl phylo=phylo_7955 -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ # Step2: remove .ff from genomes that are not leaf nodes
+ # and put nodes on 0 that are behind genome node
+ DbSync.pl -d ./all_sync/ -n ./nr_raw/nodes.dmp.fmt.new
+ mv ./all_sync/*.ff ./all_ff/
+ #to update statistics
+ [msestak@tiktaalik data]$ mv ./all_sync/*.ff ./all_ff/
+ [msestak@tiktaalik data]$ ls ./all_sync/ | wc -l
+ #1331
+ [msestak@tiktaalik data]$ ls ./all_ff/ | wc -l
+ #25244
+ #copy info files to update them
+ [msestak@tiktaalik data]$ cp ./all_sync/info.* ./all_ff/
+ #update info files for Phylostrat
+ [msestak@tiktaalik data]$ MakePhyloDb -d ./all_ff/
+ [msestak@tiktaalik data]$ cat ./all_ff/info.paf 
+ #2015-9-24.13:45:35 :Database Created On:
+ #25244 :Number Of Genomes:
+ #38538642861 :Database Size:
+ #37564616819 :Effective Database Size:
+ [msestak@tiktaalik data]$ cat ./all_sync/info.paf 
+ #2015-9-22.18:47:19 :Database Created On:
+ #26573 :Number Of Genomes:
+ #41516744334 :Database Size:
+ #40475950304 :Effective Database Size:
+
+ # Step3: analyze database
+ [msestak@tiktaalik data]$ AnalysePhyloDb -d ./all_ff/ -t 7955 -n ./nr_raw/nodes.dmp.fmt.new.sync > analyze_25244_genomes_danio
+ [msestak@tiktaalik data]$ grep "<ps>" analyze_26575_genomes_danio > analyze_26575_genomes_danio.ps
+ [msestak@tiktaalik data]$ grep -P "^\d+\t" analyze_26575_genomes_danio > analyze_26575_genomes_danio.genomes
+ [msestak@tiktaalik data]$ wc -l analyze_26575_genomes_danio.genomes 
+ #23923 analyze_26575_genomes_danio.genomes
+
+
+ # Step4: partition genomes per phylostrata for cdhit
+ perl ./lib/CollectGenomes.pm --mode=prepare_cdhit_per_phylostrata --in=/home/msestak/dropbox/Databases/db_02_09_2015/data/all_ff/ --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ -tbl phylo=phylo_7955 -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
  #[2015/09/10 14:32:55,739]Report: 34 phylostrata:{ps1 ps2 ps3 ps4 ps5 ps6 ps7 ps8 ps9 ps10 ps11 ps12 ps13 ps14 ps15 ps16 ps17 ps18 ps19 ps20 ps21 ps22 ps23 ps24 ps25 ps26 ps27 ps28 ps29 ps30 ps31 ps32 ps33 ps34}
  #[2015/09/10 14:33:57,226]Action: table phylo_7955_copy inserted 1121881 rows!
  #[2015/09/10 14:35:01,741]Action: table phylo_7955_backup_24641 inserted 1121881 rows!
@@ -6345,55 +6493,14 @@ For help write:
  #Action: table phylo_7955 deleted 1283 rows
  #Report: table phylo_7955 has 1120598 rows
 
- # Step3: run cdhit based on cd_hit_cmds file
+ # Step5: run cdhit based on cd_hit_cmds file
  perl ./lib/CollectGenomes.pm --mode=run_cdhit --if=/home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/cd_hit_cmds --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ -ho localhost -d nr_2015_9_2  -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v
+ #remove first and last phylostratum
+ #run ps1 separately
+ #ignore last ps (input file - keep them all)
 
-
- # Step4: analyze database
- [msestak@tiktaalik data]$ AnalysePhyloDb -d ./all2/ -t 7955 -n ./nr_raw/nodes_raw_2015_9_3.new > analyze_26575_genomes_danio
- [msestak@tiktaalik data]$ grep "<ps>" analyze_26575_genomes_danio 
- #<ps>	1	22625	131567
- #<ps>	2	223	2759
- #<ps>	3	12	1708629
- #<ps>	4	1	1708631
- #<ps>	5	774	33154
- #<ps>	6	2	1708671
- #<ps>	7	1	1708672
- #<ps>	8	2	1708673
- #<ps>	9	7	33208
- #<ps>	10	1	6072
- #<ps>	11	8	1708696
- #<ps>	12	116	33213
- #<ps>	13	2	33511
- #<ps>	14	1	7711
- #<ps>	15	2	1708690
- #<ps>	16	1	7742
- #<ps>	17	1	7776
- #<ps>	18	0	117570
- #<ps>	19	121	117571
- #<ps>	20	0	7898
- #<ps>	21	0	186623
- #<ps>	22	1	41665
- #<ps>	23	1	32443
- #<ps>	24	1	1489341
- #<ps>	25	16	186625
- #<ps>	26	1	186634
- #<ps>	27	0	32519
- #<ps>	28	2	186626
- #<ps>	29	0	186627
- #<ps>	30	0	7952
- #<ps>	31	0	30727
- #<ps>	32	0	7953
- #<ps>	33	0	7954
- #<ps>	34	1	7955
- [msestak@tiktaalik data]$ grep "<ps>" analyze_26575_genomes_danio > analyze_26575_genomes_danio.ps
- [msestak@tiktaalik data]$ grep -P "^\d+\t" analyze_26575_genomes_danio > analyze_26575_genomes_danio.genomes
- [msestak@tiktaalik data]$ wc -l analyze_26575_genomes_danio.genomes 
- #23923 analyze_26575_genomes_danio.genomes
-
-
-
-
+ # Step5: combine all cdhit files into one db and replace J to * for BLAST
+ 
 
 
  ALTERNATIVE with Deep:
