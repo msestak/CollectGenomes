@@ -4300,124 +4300,6 @@ sub merge_existing_genomes {
 }
 
 
-sub merge_existing_genomes_old {
-    my $log = Log::Log4perl::get_logger("main");
-    $log->logcroak( 'merge_existing_genomes() needs a $param_href' ) unless @_ == 1;
-    my ( $param_href ) = @_;
-
-	my $DATABASE = $param_href->{DATABASE} or $log->logcroak( 'no $DATABASE specified on command line!' );
-	my $OUT      = $param_href->{OUT}      or $log->logcroak( 'no $OUT specified on command line!' );
-    my %TABLES   = %{ $param_href->{TABLES} } or $log->logcroak('no $TABLES specified on command line!');
-    my $TI_FULLLIST = $TABLES{ti_full_list};
-	my $nr_dir   = path(path($OUT)->parent, 'nr_genomes');
-	my $ens_dir  = path(path($OUT)->parent, 'ensembl_all');
-	my $jgi_dir  = path(path($OUT)->parent, 'jgi_clean');
-	my $ext_dir  = path(path($OUT)->parent, 'external');
-
-			
-	#get new handle
-    my $dbh = dbi_connect($param_href);
-
-	#check if genomes larger than 30_000 seq and offer to delete from ti_full_list table
-    my $sel_large = qq{
-	SELECT ti, genes_cnt, species_name, source
-	FROM $TI_FULLLIST
-	WHERE genes_cnt >= 30000
-	};
-	my %ti_large = map { $_->[0], [ $_->[1], $_->[2], $_->[3] ] } @{ $dbh->selectall_arrayref($sel_large) };
-    my $cnt_pairs = keys %ti_large;
-    $log->info("Report: Found $cnt_pairs ti->[genes_cnt-species_name-source] pairs");
-
-	#prepare delete query for large genomes
-	my $del_q = qq{
-	DELETE ti FROM $TI_FULLLIST AS ti
-	WHERE ti = ?
-	};
-	my $sth_del = $dbh->prepare($del_q);
-
-    while ( my ( $ti, $species_ref ) = each %ti_large ) {
-        my $genes_cnt    = $species_ref->[0];
-        my $species_name = $species_ref->[1];
-        my $source       = $species_ref->[2];
-		my $decision = prompt "Do you want to delete species:{$species_name} with->$genes_cnt genes from:$source?",
-		               -yn,
-					   -single;
-		if ($decision eq 'y') {
-			eval {$sth_del->execute($ti); };
-			$log->error("Action: delete failed for species:$species_name") if $@;
-			$log->debug("Action: deleted species:{$species_name} from $source with $genes_cnt from $TI_FULLLIST") unless $@;
-		}
-        else {
-            $log->trace("Action: species:{$species_name} from $source with $genes_cnt left in $TI_FULLLIST");
-        }
-    }
-
-	#work on all other sequences
-	#get all tax_ids in TI_FULLLIST
-    my $tis_query = qq{
-    SELECT ti
-    FROM $TI_FULLLIST
-    ORDER BY ti
-    };
-    my @tis = map { $_->[0] } @{ $dbh->selectall_arrayref($tis_query) };
-
-	#clean $OUT dir before use
-	if ( -d $OUT ) {
-            path($OUT)->remove_tree and $log->warn(qq|Action: dir $OUT removed and cleaned|);
-        }
-    path( $OUT )->mkpath and $log->trace(qq|Action: dir $OUT created empty|);
-
-	#get NR genomes
-	my @nr = File::Find::Rule->file()
-								   ->name(qr/\A\d+\z/)
-								   ->in($nr_dir);
-	#my @nr_tis = map {path($_)->basename} @nr;
-	#print Dumper(\@nr_tis);
-	
-    #get Ensembl genomes
-    my @ens = File::Find::Rule->file()->name(qr/\A\d+\z/)->in($ens_dir);
-	#my @ens_tis = map { path($_)->basename } @ens;
-	#print Dumper( \@ens_tis );
-
-    #get JGI genomes
-    my @jgi = File::Find::Rule->file()->name(qr/\A\d+\z/)->in($jgi_dir);
-	#my @jgi_tis = map { path($_)->basename } @jgi;
-	#print Dumper( \@jgi_tis );
-
-    #get external genomes
-    my @ext = File::Find::Rule->file()->name(qr/\A\d+\z/)->in($ext_dir);
-	#my @ext_tis = map { path($_)->basename } @ext;
-	#print Dumper( \@ext_tis );
-
-	#SECOND PART: copy to $OUT (to all dir) if found in TI_FULLLIST table
-	my $genome_cnt = 0;
-	foreach my $genome (@jgi, @nr, @ext, @ens) {
-		$log->trace( "Action: working on $genome" );
-		my $ti_from_file = path($genome)->basename;
-
-		if (grep {$_ == $ti_from_file} @tis ) {
-			#delete ti_files (genomes) if they exist in $OUT dir
-			my $end_ti_file = path($OUT, $ti_from_file);
-			if (-f $end_ti_file) {
-			unlink $end_ti_file and $log->error( "Action: file $end_ti_file unlinked" );
-			}
-			#copy them from in_dir to $OUT
-            path($genome)->copy($OUT)
-				and $log->debug( "Action: file $genome copied to $end_ti_file" );
-			$genome_cnt++;
-		}
-		else {
-			$log->warn( "Action: file $genome not found in ti_full_list:$TI_FULLLIST" );
-		}
-	}
-
-	$log->info("Copied $genome_cnt genomes to $OUT");
-	$dbh->disconnect;
-
-	return;
-}
-
-
 ### INTERFACE SUB ###
 # Usage      : prepare_cdhit_per_phylostrata( $param_href );
 # Purpose    : it splits database of genomes based on phylostrata and sends each phylostrata to cdhit
@@ -4451,11 +4333,11 @@ sub prepare_cdhit_per_phylostrata {
 	my $ps_num = @ps_columns;
     $log->debug(qq|Report: $ps_num phylostrata:{@ps_columns}|);
 
-	#make a backup copy of PHYLO table
-	my $ph_copy = create_table_copy( { ORIG => $PHYLO, %{$param_href} } );
-
-	#create copy of copy of $ORIG table (just in case)
-	my $ph_backup = create_table_copy( { ORIG => $PHYLO, TO => "${PHYLO}_backup", %{$param_href} } );
+	#	#make a backup copy of PHYLO table
+	#	my $ph_copy = create_table_copy( { ORIG => $PHYLO, %{$param_href} } );
+	#
+	#	#create copy of copy of $ORIG table (just in case)
+	#	my $ph_backup = create_table_copy( { ORIG => $PHYLO, TO => "${PHYLO}_backup", %{$param_href} } );
 
     #collect all genomes from $IN
     my @ti_files = File::Find::Rule->file()->name(qr/\A\d+\.ff\z/)->in($IN);   #taxid.ff files created by MakePhyloDb
@@ -4536,203 +4418,50 @@ sub prepare_cdhit_per_phylostrata {
 		}
     }
 
-	#run cleanup of $PHYLO table for all phylostrata that have no genomes
-	my @fa_files = File::Find::Rule->file()->name(qr/\Aps\d+\.fa\z/)->in($OUT);
-	#$log->trace("FA_FILES:@fa_files");
-	my @ps_names = map { path($_)->basename } @fa_files;
-	@ps_names = map { /(\Aps\d+)/ } @ps_names;
-	@ps_names = sort @ps_names;
-	$log->trace("PS_NAMES:@ps_names");
-	my %ps_na = map {$_ => undef} @ps_names;
-
-	#say "PS_COLUMNS:@ps_columns";
-	my %ps_col = map {$_ => undef} @ps_columns;
-	my @drop_ps;
-	foreach my $ps_col (sort keys %ps_col) {
-		if (! exists $ps_na{$ps_col}) {
-			push @drop_ps, $ps_col;
-		}
-	}
-	#say "DROP_PS:@drop_ps";
-	my $droplist = join ", ", map { "DROP COLUMN $_" } @drop_ps;
-	#$log->trace( "DROPLIST:$droplist" );
-
-	my $del_list = join " AND ", map { "$_ IS NULL" } @ps_names;
-	#$log->trace("DEL_LIST:$del_list");
-
-	my $alter_q = qq{
-	ALTER TABLE $PHYLO $droplist 
-	};
-	$log->trace("$alter_q");
-	eval{ $dbh->do($alter_q)};
-	$log->error( "Action: altering table $PHYLO failed: $@" ) if $@;
-	$log->info( "Action: table $PHYLO altered:{@drop_ps} dropped" ) unless $@;
-
-	my $del_q = qq{
-	DELETE ph FROM $PHYLO AS ph
-	WHERE $del_list
-	};
-	$log->trace("$del_q");
-	my $del_rows;
-	eval{ $del_rows = $dbh->do($del_q)};
-	$log->error( "Action: deleting table $PHYLO failed: $@" ) if $@;
-	$log->info( "Action: table $PHYLO deleted $del_rows rows" ) unless $@;
-
-    my $rows_left = $dbh->selectrow_array("SELECT COUNT(*) FROM $PHYLO");
-    $log->info("Report: table $PHYLO has $rows_left rows");
-
-    $dbh->disconnect;
-    return;
-
-}
-
-
-sub prepare_cdhit_per_phylostrata_old {
-    my $log = Log::Log4perl::get_logger("main");
-    $log->logcroak('prepare_cdhit_per_phylostrata() needs a $param_href') unless @_ == 1;
-    my ($param_href) = @_;
-
-    my $DATABASE = $param_href->{DATABASE} or $log->logcroak('no $DATABASE specified on command line!');
-    my $IN       = $param_href->{IN}       or $log->logcroak('no $IN specified on command line!');
-    my $OUT      = $param_href->{OUT}      or $log->logcroak('no $OUT specified on command line!');
-    my %TABLES   = %{ $param_href->{TABLES} } or $log->logcroak('no $TABLES specified on command line!');
-    my $PHYLO    = $TABLES{phylo};
-
-    #get new handle
-    my $dbh = dbi_connect($param_href);
-
-    #FIRST: get phylostrata from phylo table for specific organism
-    my $select_ps_columns = qq{
-        SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-        WHERE TABLE_SCHEMA = '$DATABASE' AND TABLE_NAME = '$PHYLO' AND ORDINAL_POSITION > 1
-    };    #-- skip first column which is id auto_increment
-    my @ps_columns = map { $_->[0] } @{ $dbh->selectall_arrayref($select_ps_columns) };
-	my $ps_num = @ps_columns;
-    $log->debug(qq|Report: $ps_num phylostrata:{@ps_columns}|);
-
-	#make a backup copy of PHYLO table
-	my $ph_copy = create_table_copy( { ORIG => $PHYLO, %{$param_href} } );
-
-	#create copy of copy of $ORIG table (just in case)
-	my $ph_backup = create_table_copy( { ORIG => $PHYLO, TO => "${PHYLO}_backup", %{$param_href} } );
-
-    #collect all genomes from $IN
-    my @ti_files = File::Find::Rule->file()->name(qr/\A\d+\z/)->in($IN);
-	@ti_files = sort @ti_files;
-
-	#clean $OUT dir before use
-	if ( -d $OUT ) {
-            path($OUT)->remove_tree and $log->warn(qq|Action: dir $OUT removed and cleaned|);
-        }
-    path( $OUT )->mkpath and $log->trace(qq|Action: dir $OUT created empty|);
-
-    #create outdir foreach phylostratum and copy genomes from that ps into it
-    DIR:
-    foreach my $ps (@ps_columns) {
-		my $ps_path = path( $OUT, $ps );
-        if ( -d $ps_path ) {
-            path($ps_path)->remove_tree and $log->warn(qq|Action: dir $ps_path removed|);
-        }
-        path( $ps_path )->mkpath and $log->trace(qq|Action: dir $ps_path created|);
-		
-		#if ti in this phylostratum copy it to this ps directory
-        my $select_ti = sprintf( qq{
-		SELECT %s
-		FROM %s
-		WHERE %s = ? },
-            $dbh->quote_identifier($ps), $dbh->quote_identifier($PHYLO), $dbh->quote_identifier($ps)
-        );
-        my $sth = $dbh->prepare($select_ti);
-
-        TAXID:
-        foreach my $ti_file (@ti_files) {
-            my $ti = path($ti_file)->basename;
-
-            $sth->execute($ti);
-			#say $select_ti;
-            $sth->bind_col( 1, \my $tax_id, { TYPE => 'integer' } );
-            $sth->fetchrow_arrayref();   #now $tax_id has ti num
-
-            my $taxid_in_ps_dir = path( $ps_path, $ti );
-            if ( -f $taxid_in_ps_dir ) {
-                unlink $taxid_in_ps_dir and $log->warn(qq|Action: genome $taxid_in_ps_dir unlinked|);
-            }
-
-            if ($tax_id) {
-                path($ti_file)->copy($ps_path) and $log->debug(qq|Action: File $ti_file copied to $ps_path|);
-            }
-        }
-
-		#cat all files in one ps
-		my $out_ps_full = path($OUT, $ps . '.fa');
-		if (-f $out_ps_full) {
-			#unlink $out_ps_full and $log->warn(qq|Action: ps_full_file $out_ps_full unlinked|);
-			$log->warn(qq|Action: ps_full_file $out_ps_full exists, it will be appended|);
-		}
-		my @tis_in_psdir = File::Find::Rule->file()->name(qr/\A\d+\z/)->in($ps_path);
-		#my @ti_files = sort @ti_files;
-		if (@tis_in_psdir) {
-			my $cnt_per_ps = @tis_in_psdir;
-			catalanche(\@tis_in_psdir => $out_ps_full); 
-			$log->debug(qq|Action: concatenated $cnt_per_ps files to $out_ps_full|);
-		}
-
-		#clean ps directories
-		if ( -d $ps_path ) {
-            path($ps_path)->remove_tree and $log->warn(qq|Action: dir $ps_path removed|);
-        }
-		
-		#create TORQUE scripts to run cdhit
-		if (-f $out_ps_full) {
-			my $pbs_path = print_pbs_cdhit_script($ps, $out_ps_full);
-			$log->info(qq|Action: TORQUE script printed to $pbs_path|) if $pbs_path;
-		}
-    }
-
-	#run cleanup of $PHYLO table for all phylostrata that have no genomes
-	my @fa_files = File::Find::Rule->file()->name(qr/\Aps\d+\.fa\z/)->in($OUT);
-	#$log->trace("FA_FILES:@fa_files");
-	my @ps_names = map { path($_)->basename } @fa_files;
-	@ps_names = map { /(\Aps\d+)/ } @ps_names;
-	@ps_names = sort @ps_names;
-	$log->trace("PS_NAMES:@ps_names");
-	my %ps_na = map {$_ => undef} @ps_names;
-
-	#say "PS_COLUMNS:@ps_columns";
-	my %ps_col = map {$_ => undef} @ps_columns;
-	my @drop_ps;
-	foreach my $ps_col (sort keys %ps_col) {
-		if (! exists $ps_na{$ps_col}) {
-			push @drop_ps, $ps_col;
-		}
-	}
-	#say "DROP_PS:@drop_ps";
-	my $droplist = join ", ", map { "DROP COLUMN $_" } @drop_ps;
-	#$log->trace( "DROPLIST:$droplist" );
-
-	my $del_list = join " AND ", map { "$_ IS NULL" } @ps_names;
-	#$log->trace("DEL_LIST:$del_list");
-
-	my $alter_q = qq{
-	ALTER TABLE $PHYLO $droplist 
-	};
-	$log->trace("$alter_q");
-	eval{ $dbh->do($alter_q)};
-	$log->error( "Action: altering table $PHYLO failed: $@" ) if $@;
-	$log->info( "Action: table $PHYLO altered:{@drop_ps} dropped" ) unless $@;
-
-	my $del_q = qq{
-	DELETE ph FROM $PHYLO AS ph
-	WHERE $del_list
-	};
-	$log->trace("$del_q");
-	my $del_rows;
-	eval{ $del_rows = $dbh->do($del_q)};
-	$log->error( "Action: deleting table $PHYLO failed: $@" ) if $@;
-	$log->info( "Action: table $PHYLO deleted $del_rows rows" ) unless $@;
-
-    my $rows_left = $dbh->selectrow_array("SELECT COUNT(*) FROM $PHYLO");
-    $log->info("Report: table $PHYLO has $rows_left rows");
+	#	#run cleanup of $PHYLO table for all phylostrata that have no genomes
+	#	my @fa_files = File::Find::Rule->file()->name(qr/\Aps\d+\.fa\z/)->in($OUT);
+	#	#$log->trace("FA_FILES:@fa_files");
+	#	my @ps_names = map { path($_)->basename } @fa_files;
+	#	@ps_names = map { /(\Aps\d+)/ } @ps_names;
+	#	@ps_names = sort @ps_names;
+	#	$log->trace("PS_NAMES:@ps_names");
+	#	my %ps_na = map {$_ => undef} @ps_names;
+	#
+	#	#say "PS_COLUMNS:@ps_columns";
+	#	my %ps_col = map {$_ => undef} @ps_columns;
+	#	my @drop_ps;
+	#	foreach my $ps_col (sort keys %ps_col) {
+	#		if (! exists $ps_na{$ps_col}) {
+	#			push @drop_ps, $ps_col;
+	#		}
+	#	}
+	#	#say "DROP_PS:@drop_ps";
+	#	my $droplist = join ", ", map { "DROP COLUMN $_" } @drop_ps;
+	#	#$log->trace( "DROPLIST:$droplist" );
+	#
+	#	my $del_list = join " AND ", map { "$_ IS NULL" } @ps_names;
+	#	#$log->trace("DEL_LIST:$del_list");
+	#
+	#	my $alter_q = qq{
+	#	ALTER TABLE $PHYLO $droplist 
+	#	};
+	#	$log->trace("$alter_q");
+	#	eval{ $dbh->do($alter_q)};
+	#	$log->error( "Action: altering table $PHYLO failed: $@" ) if $@;
+	#	$log->info( "Action: table $PHYLO altered:{@drop_ps} dropped" ) unless $@;
+	#
+	#	my $del_q = qq{
+	#	DELETE ph FROM $PHYLO AS ph
+	#	WHERE $del_list
+	#	};
+	#	$log->trace("$del_q");
+	#	my $del_rows;
+	#	eval{ $del_rows = $dbh->do($del_q)};
+	#	$log->error( "Action: deleting table $PHYLO failed: $@" ) if $@;
+	#	$log->info( "Action: table $PHYLO deleted $del_rows rows" ) unless $@;
+	#
+	#    my $rows_left = $dbh->selectrow_array("SELECT COUNT(*) FROM $PHYLO");
+	#    $log->info("Report: table $PHYLO has $rows_left rows");
 
     $dbh->disconnect;
     return;
