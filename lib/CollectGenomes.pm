@@ -1902,8 +1902,6 @@ sub import_nodes {
 }
 
 
-
-
 ### INTERFACE SUB ###
 # Usage      : fn_create_tree( $param_href );
 # Purpose    : installs function fn_create_tree in database (and tree table)
@@ -2548,7 +2546,6 @@ sub run_mysqldump {
 }
 
 
-
 ### INTERFACE SUB ###
 # Usage      : nr_genome_counts( $param_href );
 # Purpose    : gets gene count of all tis (species and other categories) from nr table
@@ -2714,6 +2711,7 @@ sub nr_genome_counts {
 	return;
 }
 
+
 ### INTERFACE SUB ###
 # Usage      : export_all_nr_genomes( $param_href );
 # Purpose    : prints all nr genomes to dropdox/D.../db../data/eukarya
@@ -2797,8 +2795,6 @@ sub export_all_nr_genomes {
 }
 
 
-
-
 ### INTERFACE SUB ###
 # Usage      : get_missing_genomes( $param_href );
 # Purpose    : JOINs existing tis with all possible tis from nr_base (ti, gi, fasta)
@@ -2879,6 +2875,7 @@ sub get_missing_genomes {
 
 	return;
 }
+
 
 ### INTERFACE SUB ###
 # Usage      : del_virus_from_nr( $param_href );
@@ -3215,69 +3212,6 @@ sub del_total_genomes {
 	$log->debug( "Action: deleted $rows_hy hybrid species from $table_list") unless $@;
 	$log->error( "Action: table $table_list delete for hybrids failed: $@" ) if $@;
 
-	#SECOND PART: remove superfluous genomes
-    my $species_query = qq{
-    SELECT species_name 
-    FROM $table_list
-    ORDER BY species_name
-    };
-    my @species_names = map { $_->[0] } @{ $dbh->selectall_arrayref($species_query) };
-
-	#get count of genus if there is more than 1 (into hash)
-	my $found_genus_species = '';
-	my %found_hash_cnt;
-	foreach my $species (@species_names) {
-		(my $genus_species = $species) =~ s/\A([^_]+)_(.+)_(?:.+)\z/$1_$2/g;
-
-		if ($genus_species eq $found_genus_species) {
-			$found_hash_cnt{$genus_species}++;   #add to hash only if found earlier (only duplicates)
-		}
-		$found_genus_species = $genus_species;   #now found has previous genus_species
-	}
-	#print Dumper(\%found_hash_cnt);
-
-	#now get found species into hash of arefs to delete them later
-	my (%hoarefs);
-	foreach my $species2 (@species_names) {
-		(my $genus_spec = $species2) =~ s/\A([^_]+)_(.+)_(?:.+)\z/$1_$2/g;
-
-		if (exists $found_hash_cnt{$genus_spec}) {
-			push @{ $hoarefs{$genus_spec} }, $species2;   #created Hash of array refs
-		}
-	}
-	#print Dumper(\%hoarefs);
-
-	#search for species to delete
-	my $delete_spec = qq{
-		DELETE ti FROM $table_list AS ti
-		WHERE species_name = ?;
-	};
-	my $sth_del = $dbh->prepare($delete_spec, { async => 1 } );
-
-	while (my ($spec_key, $grp_aref) = each %hoarefs) {
-		my @spec_group = @{ $grp_aref };   #full group here
-		my %hash_to_print = ($spec_key => $grp_aref);
-		foreach my $spec (@{ $grp_aref }) {
-			my @spec_search_group = map { /\A$spec\z/ ? () : $_} @spec_group;            #remove only species that is exactly the same
-			@spec_search_group = map { /\A$spec(\d+)\z/ ? () : $_} @spec_search_group;   #remove species that is different only in ending number too
-			@spec_search_group = map { /\A$spec([^_]+)\z/ ? () : $_} @spec_search_group; #remove species that is different only in ending letters after _
-			if ( grep { /$spec/ } @spec_search_group) {                       #search for that species among the other species (anywhere in name)
-				#$log->trace("Report: found match for:{$spec} in:{@spec_search_group}");
-				print Dumper(\%hash_to_print);     #print group before delete
-				$log->trace( "Action: deleting:$spec" );
-
-				#DELETE species from ti_full_list table (because it is species with strains present)
-				eval { $sth_del->execute($spec); };
-				my $rows_del_spec = $sth_del->mysql_async_result;
-			    $log->debug( "Action: table $table_list deleted $rows_del_spec rows for:{$spec}" ) unless $@;
-			    $log->debug( "Action: deleting $table_list failed for:$spec: $@" ) if $@;
-			}
-			else {
-				#$log->trace("Report: no match for:$spec in {@spec_search_group}");
-			}
-		}
-	}
-	
 	#report the changes made
 	my $genome_cnt = $dbh->selectrow_array("SELECT COUNT(*) FROM $table_list");
 	$log->info("Report: found $genome_cnt genomes in table:$table_list");
