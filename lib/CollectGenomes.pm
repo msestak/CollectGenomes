@@ -36,7 +36,7 @@ our @EXPORT_OK = qw{
     init_logging
 	get_parameters_from_cmd
 	dbi_connect
-	create_database
+	create_db
 	make_db_dirs
 	create_table
 	capture_output
@@ -129,10 +129,8 @@ sub main {
     #dispatch table is hash (could be also hash_ref)
     my %dispatch = (
 		make_db_dirs                  => \&make_db_dirs,
-        create_db                     => \&create_database,
+        create_db                     => \&create_db,
         nr_ftp                        => \&ftp_robust,
-        extract_nr                    => \&extract_nr,
-        load_nr                       => \&load_nr,
         extract_and_load_nr           => \&extract_and_load_nr,
         gi_taxid                      => \&extract_and_load_gi_taxid,
 		del_virus_from_nr             => \&del_virus_from_nr,
@@ -149,7 +147,7 @@ sub main {
         proc_phylo                    => \&proc_create_phylo,
         call_phylo                    => \&call_proc_phylo,
 		jgi_download                  => \&jgi_download,
-        get_ensembl_genomes               => \&get_ensembl_genomes,
+        get_ensembl_genomes           => \&get_ensembl_genomes,
         nr_genome_counts              => \&nr_genome_counts,
 		export_all_nr_genomes         => \&export_all_nr_genomes,
         get_missing_genomes           => \&get_missing_genomes,
@@ -432,16 +430,16 @@ sub dbi_connect {
 }
 
 ### INTERFACE SUB ###
-# Usage      : create_database();
+# Usage      : create_db();
 # Purpose    : creates database that will hold sequences to analyze, maps and others
 # Returns    : nothing
 # Parameters : ( $param_href ) -> params from command line
 # Throws     : croaks if wrong number of parameters
 # Comments   : first sub in chain, run only once at start (it drops database)
 # See Also   :
-sub create_database {
+sub create_db {
     my $log = Log::Log4perl::get_logger("main");
-    $log->logcroak ('create_database() needs a hash_ref' ) unless @_ == 1;
+    $log->logcroak ('create_db() needs a hash_ref' ) unless @_ == 1;
     my ( $param_href ) = @_;
 
     my $CHARSET  = defined $param_href->{CHARSET}     ? $param_href->{CHARSET}     : 'ascii';
@@ -3370,9 +3368,9 @@ sub import_raw_names {
 			#next NAMES if $name_type ne 'scientific name';       #ignore all other names
 
             #format what you selected (Robert's underscores)
-            $species_name    =~ tr/ /_/;
-            $species_synonym =~ tr/ /_/;
-            $name_type       =~ tr/ /_/;
+            $species_name    =~ tr/0-9A-Za-z_//dc;
+            $species_synonym =~ tr/0-9A-Za-z_//dc;
+            $name_type       =~ tr/0-9A-Za-z_//dc;
 
             print {$names_out_fh} "$ti\t$species_name\t$species_synonym\t$name_type\n";
 
@@ -6179,10 +6177,9 @@ It runs clustering with cd-hit and builds a BLAST database per species analyzed.
 To use different functionality use specific modes.
 Possible modes:
 
- create_db                     => \&create_database,
+ create_db                     => \&create_db,
  ftp                           => \&ftp_robust,
  extract_nr                    => \&extract_nr,
- load_nr                       => \&load_nr,
  extract_and_load_nr           => \&extract_and_load_nr,
  gi_taxid                      => \&extract_and_load_gi_taxid,
  ti_gi_fasta                   => \&ti_gi_fasta,
