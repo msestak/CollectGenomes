@@ -73,6 +73,7 @@ our @EXPORT_OK = qw{
 	prepare_cdhit_per_phylostrata
 	run_cdhit
 	cdhit_merge
+	manual_add_fasta
 	
 	};
 
@@ -107,7 +108,7 @@ sub main {
     my $PASSWORD = $param_href->{PASSWORD};
     my $PORT     = $param_href->{PORT};
     my $SOCKET   = $param_href->{SOCKET};
-    my $TAX_ID   = $param_href->{TAX_ID};
+    my $TAXID   = $param_href->{TAXID};
     my $VERBOSE  = $param_href->{VERBOSE};
 
 	#start logging for the rest of program (without capturing of parameters)
@@ -164,6 +165,7 @@ sub main {
         prepare_cdhit_per_phylostrata => \&prepare_cdhit_per_phylostrata,
         run_cdhit                     => \&run_cdhit,
 		cdhit_merge                   => \&cdhit_merge,
+		manual_add_fasta              => \&manual_add_fasta,
 
     );
 
@@ -205,7 +207,7 @@ sub get_parameters_from_cmd {
     print 'My @ARGV: {', join( "} {", @ARGV ), '}', "\n";
 	#<<< notidy
     my ($help,  $man,      @MODE,
-		$NODES, $NAMES,    %TABLES,   $ORG,      $TAX_ID, $MAP,
+		$NODES, $NAMES,    %TABLES,   $ORG,      $TAXID, $MAP,
 		$OUT,   $IN,       $OUTFILE,  $INFILE,
         $HOST,  $DATABASE, $USER,     $PASSWORD, $PORT,   $SOCKET, $CHARSET, $ENGINE,
 		$REMOTE_HOST,      $REMOTE_DIR,          $REMOTE_FILE,
@@ -222,7 +224,7 @@ sub get_parameters_from_cmd {
         'map=s'            => \$MAP,
         'tables|tbl=s'     => \%TABLES,        #accepts 1 or more arguments
         'organism|org=s'   => \$ORG,
-        'tax_id|t=i'       => \$TAX_ID,
+        'tax_id|t=i'       => \$TAXID,
         'out|o=s'          => \$OUT,
         'outfile|of=s'     => \$OUTFILE,
         'in|i=s'           => \$IN,
@@ -278,7 +280,7 @@ sub get_parameters_from_cmd {
             TABLES      => \%TABLES,
             ORG         => $ORG,
 			MAP         => $MAP,
-            TAX_ID      => $TAX_ID,
+            TAXID      => $TAXID,
             OUT         => $OUT,
             OUTFILE     => $OUTFILE,
 			IN          => $IN,
@@ -1919,10 +1921,10 @@ sub fn_create_tree {
 
     my $dbh   = dbi_connect($param_href);
     my $NODES = $param_href->{NODES} or $log->logcroak( 'no $NODES file specified on command line!' );
-    my $TAX_ID = $param_href->{TAX_ID} or $log->logcroak( 'no $TAX_ID specified on command line!' );
+    my $TAXID = $param_href->{TAXID} or $log->logcroak( 'no $TAXID specified on command line!' );
 
-    #Using TAX_ID to get unique table names
-    my $table    = "tree$TAX_ID";
+    #Using TAXID to get unique table names
+    my $table    = "tree$TAXID";
     my $function = "fn_create_$table";
 
     my $create_table_query = sprintf( qq{
@@ -2001,7 +2003,7 @@ sub fn_retrieve_phylogeny {
 
     my $dbh    = dbi_connect($param_href);
     my $NODES  = $param_href->{NODES} or $log->logcroak('no $NODES file specified on command line!');
-    my $TAX_ID = $param_href->{TAX_ID} or $log->logcroak('no $TAX_ID file specified on command line!');
+    my $TAXID = $param_href->{TAXID} or $log->logcroak('no $TAXID file specified on command line!');
     my $ENGINE = defined $param_href->{ENGINE} ? $param_href->{ENGINE} : 'InnoDB';
     (my $names = $NODES) =~ s/\A(.)(?:.+?)_(.+)\z/$1ames_$2/;
 
@@ -2031,9 +2033,9 @@ sub fn_retrieve_phylogeny {
     }
 
     #using $$ as process_id to get unique table_name
-    my $table           = "tree_fn_ret_ph$TAX_ID";
-    my $table_phylogeny = "retrieve_phylogeny$TAX_ID";
-    my $function        = "fn_retrieve_phylogeny$TAX_ID";
+    my $table           = "tree_fn_ret_ph$TAXID";
+    my $table_phylogeny = "retrieve_phylogeny$TAXID";
+    my $function        = "fn_retrieve_phylogeny$TAXID";
 
     #back to AUTOCOMMIT mode, we don't need transactions anymore
     $dbh->{AutoCommit} = 1;
@@ -2144,19 +2146,19 @@ sub prompt_fn_retrieve {
     my ($param_href) = @_;
 
     my $dbh    = dbi_connect($param_href);
-    my $TAX_ID = $param_href->{TAX_ID} or $log->logcroak('no $TAX_ID file specified on command line!');
+    my $TAXID = $param_href->{TAXID} or $log->logcroak('no $TAXID file specified on command line!');
 
     #using $$ as process_id to get unique table_name
-    my $table_ret       = "tree_fn_ret_ph$TAX_ID";
-    my $table_phylogeny = "retrieve_phylogeny$TAX_ID";
-    my $function        = "fn_retrieve_phylogeny$TAX_ID";
+    my $table_ret       = "tree_fn_ret_ph$TAXID";
+    my $table_phylogeny = "retrieve_phylogeny$TAXID";
+    my $function        = "fn_retrieve_phylogeny$TAXID";
 
     #test function on tax_id from command line
     my $test_fn_retrieve_query = qq{
     SELECT $function(?)
     };
     my $sth = $dbh->prepare($test_fn_retrieve_query);
-    eval { $sth->execute($TAX_ID); };
+    eval { $sth->execute($TAXID); };
 
     #uses format to extract multiple rowsets from procedures
     do {
@@ -2345,16 +2347,16 @@ sub proc_create_phylo {
 
     my $dbh    = dbi_connect($param_href);
     my $NODES  = $param_href->{NODES}  or $log->logcroak('no $NODES file specified on command line!');
-    my $TAX_ID = $param_href->{TAX_ID} or $log->logcroak('no $TAX_ID file specified on command line!');
+    my $TAXID = $param_href->{TAXID} or $log->logcroak('no $TAXID file specified on command line!');
     my $ENGINE = defined $param_href->{ENGINE} ? $param_href->{ENGINE} : 'InnoDB';
 
     #using process_id $$ to get unique table_name
-    my $table_phylo     = "phylo_${TAX_ID}";
-    my $procedure       = "proc_create_${table_phylo}";    #phylo table has $TAX_ID
-    my $table_tree      = "tree$TAX_ID";
-    my $table_phylogeny = "retrieve_phylogeny$TAX_ID";
+    my $table_phylo     = "phylo_${TAXID}";
+    my $procedure       = "proc_create_${table_phylo}";    #phylo table has $TAXID
+    my $table_tree      = "tree$TAXID";
+    my $table_phylogeny = "retrieve_phylogeny$TAXID";
 
-    #drop unique proc_create_phylo$TAX_ID
+    #drop unique proc_create_phylo$TAXID
     my $drop_proc_query = qq{
     DROP PROCEDURE IF EXISTS $procedure
     };
@@ -2435,9 +2437,9 @@ sub proc_create_phylo {
 # Usage      : call_proc_phylo( $param_href );
 # Purpose    : calls proc_create_phylo and creates phylo table
 # Returns    : nothing
-# Parameters : ( $param_href, $TAX_ID)
+# Parameters : ( $param_href, $TAXID)
 # Throws     : croaks for parameters
-# Comments   : needs $TAX_ID from command line
+# Comments   : needs $TAXID from command line
 # See Also   :
 sub call_proc_phylo {
     my $log = Log::Log4perl::get_logger("main");
@@ -2445,16 +2447,16 @@ sub call_proc_phylo {
     my ($param_href) = @_;
 
     my $dbh    = dbi_connect($param_href);
-    my $TAX_ID = $param_href->{TAX_ID} or $log->logcroak( 'no $TAX_ID specified on command line!' );
+    my $TAXID = $param_href->{TAXID} or $log->logcroak( 'no $TAXID specified on command line!' );
     my $NODES  = $param_href->{NODES}  or $log->logcroak( 'no $NODES specified on command line!' );
 
-    #using $TAX_ID to get unique proc name (when running in parallel with create subs)
+    #using $TAXID to get unique proc name (when running in parallel with create subs)
     #using proc name from command line when running solo
-    my $proc = defined $param_href->{PROC} ? $param_href->{PROC} : "proc_create_phylo_$TAX_ID";
+    my $proc = defined $param_href->{PROC} ? $param_href->{PROC} : "proc_create_phylo_$TAXID";
     $log->trace("Report: using procedure $proc!");
-    my $table_phylo = "phylo_$TAX_ID";
-    my $table_tree  = "tree$TAX_ID";
-    my $table_ret   = "tree_fn_ret_ph$TAX_ID";
+    my $table_phylo = "phylo_$TAXID";
+    my $table_tree  = "tree$TAXID";
+    my $table_ret   = "tree_fn_ret_ph$TAXID";
 
 	#throws error: Commands out of sync; you can't run this command now
 	#without changes to $dbh
@@ -2463,9 +2465,9 @@ sub call_proc_phylo {
 	my $dbh_trace = sprintf(Dumper tied %$dbh);
 	$log->trace("$dbh_trace");
 
-    #CALL proc_create_phylo$TAX_ID
+    #CALL proc_create_phylo$TAXID
     my $call_proc_query = qq{
-    CALL $proc($TAX_ID);
+    CALL $proc($TAXID);
     };
     eval { $dbh->do( $call_proc_query ) };
     $log->error( "Action: executing $proc failed: $@" ) if $@;
@@ -4017,12 +4019,13 @@ sub copy_jgi_genomes {
 # See Also   : copy_external_genomes()
 sub collect_fasta_print {
 	my $log = Log::Log4perl::get_logger("main");
-	$log->logcroak( 'copy_external_genomes() needs a $param_href' ) unless @_ == 1;
+	$log->logcroak( 'collect_fasta_print() needs a $param_href' ) unless @_ == 1;
 	my ( $param_href ) = @_;
 
 	my $OUT      = $param_href->{OUT}   or $log->logcroak( 'no $OUT specified on command line!' );
-	my $fasta_in = $param_href->{FILE}  or $log->logcroak( 'no $fasta_in sent to sub!' );
-	my $ti       = $param_href->{TAXID} or $log->logcroak( 'no $ti sent to sub!' );
+	my $fasta_in = $param_href->{FILE}  or $log->logcroak( 'no FILE sent to sub!' );
+	my $ti       = $param_href->{TAXID} or $log->logcroak( 'no TAXID sent to sub!' );
+	my $BLAST_fmt= defined $param_href->{BLAST} ? $param_href->{BLAST} : undef ;
 
 	open my $in_fh, "<", $fasta_in  or $log->logdie( "Error: can't open $fasta_in: $!" );
 	my $fasta_out = path($OUT, $ti);
@@ -4053,8 +4056,13 @@ sub collect_fasta_print {
 			my $fasta_seq = $2;
 			$fasta_seq =~ s/\R//g;         #delete all vertical and horizontal space
 			$fasta_seq = uc $fasta_seq;    #to uppercase
-			$fasta_seq =~ tr{*}{J};        #change * to J for cd-hit
-			$fasta_seq =~ tr{A-Z}{}dc;  #delete all special characters
+			if ($BLAST_fmt) {
+			    $fasta_seq =~ tr{J}{*};    #change J to * for BLAST
+			}
+			else {
+			    $fasta_seq =~ tr{*}{J};    #change * to J for cd-hit
+			}
+			$fasta_seq =~ tr{A-Z*}{}dc;    #delete all special characters
 			#c Complement the SEARCHLIST.
 			#d Delete found but unreplaced characters.
 
@@ -4604,7 +4612,6 @@ sub run_cdhit {
     $log->logcroak('run_cdhit() needs a $param_href') unless @_ == 1;
     my ($param_href) = @_;
 
-    my $DATABASE = $param_href->{DATABASE} or $log->logcroak('no $DATABASE specified on command line!');
     my $INFILE   = $param_href->{INFILE}   or $log->logcroak('no $INFILE specified on command line!');
     my $OUT      = $param_href->{OUT}      or $log->logcroak('no $OUT specified on command line!');
 
@@ -5822,7 +5829,29 @@ sub cdhit_merge {
     return;
 }
 
+### INTERFACE SUB ###
+# Usage      : manual_add_fasta( $param_href );
+# Purpose    : if cleans genome fasta sequences and it adds it to directory of interest
+# Returns    : fasta_cnt
+# Parameters : ( $param_href ) $OUT and $INFILE AND $TAXID
+# Throws     : 
+# Comments   : it takes genome from INFILE and transforms it to BLAST format (with *)
+# See Also   : collect_fasta_print() does all the work
+sub manual_add_fasta {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('manual_add_fasta() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
 
+    my $INFILE   = $param_href->{INFILE}   or $log->logcroak('no $INFILE specified on command line!');
+    my $OUT      = $param_href->{OUT}      or $log->logcroak('no $OUT specified on command line!');
+    my $TAXID   = $param_href->{TAXID}     or $log->logcroak('no $TAXID specified on command line!');
+
+    my $fasta_cnt = collect_fasta_print({FILE => $INFILE, TAXID => $TAXID, BLAST => 1, %{$param_href} });
+
+	$log->info("Report: transformed $INFILE to $OUT/$TAXID ($fasta_cnt rows) with BLAST_format = true");
+
+    return;
+}
 
 
 
@@ -5840,123 +5869,6 @@ __END__
 CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds BLAST database (this is modulino - call it directly).
 
 =head1 SYNOPSIS
-
- Part 0 -> prepare the stage:
-
- perl ./lib/CollectGenomes.pm --mode=create_db -ho localhost -d nr -p msandbox -u msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
-
- perl ./lib/CollectGenomes.pm --mode=make_db_dirs -o /home/msestak/dropbox/Databases/db_02_09_2015/ -if /home/msestak/dropbox/Databases/db_29_07_15/doc/update_phylogeny_martin7.tsv
-
- Part I -> download genomes from Ensembl:
-
- perl ./lib/CollectGenomes.pm --mode=ensembl_ftp --out=./ensembl_ftp/ -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
-
- perl ./lib/CollectGenomes.pm --mode=ensembl_vertebrates --out=./ensembl_vertebrates/ -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
-
- Part II -> download genomes from NCBI:
-
- perl ./lib/CollectGenomes.pm --mode=nr_ftp -o ./nr -rh ftp.ncbi.nih.gov -rd /blast/db/FASTA/ -rf nr.gz
-
- perl ./lib/CollectGenomes.pm --mode=nr_ftp -o ./nr -rh ftp.ncbi.nih.gov -rd /pub/taxonomy/ -rf gi_taxid_prot.dmp.gz
-
- perl ./lib/CollectGenomes.pm --mode=nr_ftp -o ./nr -rh ftp.ncbi.nih.gov -rd /pub/taxonomy/ -rf taxdump.tar.gz
-
- Part III -> load nr into database:
-
- perl ./lib/CollectGenomes.pm --mode=extract_and_load_nr -if ./nr/nr_10k.gz -o ./nr/ -ho localhost -u msandbox -p msandbox -d nr --port=5625 --socket=/tmp/mysql_sandbox5625.sock --engine=InnoDB
-
- perl ./lib/CollectGenomes.pm --mode=gi_taxid -if ./nr/gi_taxid_prot.dmp.gz -o ./nr/ -ho localhost -u msandbox -p msandbox -d nr --port=5625 --socket=/tmp/mysql_sandbox5625.sock --engine=InnoDB
-
- perl ./lib/CollectGenomes.pm --mode=mysqldump -o ./t/nr -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
-
- Part IV -> set phylogeny for focal species:
-
- perl ./lib/CollectGenomes.pm --mode=import_raw_names -if ./t/nr/taxdump/names.dmp -o ./t/nr/ -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=InnoDB
- perl ./lib/CollectGenomes.pm --mode=import_names -if ./nr/names_martin7 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=InnoDB
-
- perl ./lib/CollectGenomes.pm --mode=import_raw_nodes -if ./t/nr/taxdump/nodes.dmp -o ./t/nr/ -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=InnoDB
- perl ./lib/CollectGenomes.pm --mode=import_nodes -if ./nr/nodes_martin7 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=InnoDB
-
- perl ./lib/CollectGenomes.pm -mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_martin7 -t 2759 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
- perl ./lib/CollectGenomes.pm -mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_martin7 -t 7955 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v --engine=InnoDB
-
- (Viroids:12884)=perl ./lib/CollectGenomes.pm -mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_martin7 -t 12884 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v --engine=TokuDB
- (Viruses:10239)=perl ./lib/CollectGenomes.pm -mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_martin7 -t 10239 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v --engine=TokuDB
- (Other:28384)=perl ./lib/CollectGenomes.pm -mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_martin7 -t 28384 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v --engine=TokuDB
- (unclassified:12908)=perl ./lib/CollectGenomes.pm -mode=fn_tree,fn_retrieve,prompt_ph,proc_phylo,call_phylo -no nodes_martin7 -t 12908 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v --engine=TokuDB
-
- perl ./lib/CollectGenomes.pm -mode=del_virus_from_nr -tbl nr=gi_taxid_prot_TokuDB -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v
-
- Part V -> get genomes from nr base:
-
- perl ./lib/CollectGenomes.pm --mode=ti_gi_fasta -d nr -ho localhost -u msandbox -p msandbox --port=5625 --socket=/tmp/mysql_sandbox5625.sock --engine=InnoDB
-
- perl ./lib/CollectGenomes.pm --mode=nr_genome_counts --tables nr=nr_ti_gi_fasta_InnoDB --tables names=names_martin7 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=InnoDB
-
- perl ./lib/CollectGenomes.pm --mode=export_all_nr_genomes -o ./nr/ --tables nr=nr_ti_gi_fasta_InnoDB_cnt -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v
-
- Part VI -> combine nr genomes with Ensembl genomes and print them out:
-
- perl ./lib/CollectGenomes.pm --mode=get_ensembl_genomes --in=./ensembl_ftp/ --tables names=names_martin7 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -en=InnoDB
-
- perl ./lib/CollectGenomes.pm --mode=get_missing_genomes --tables nr_cnt=nr_ti_gi_fasta_InnoDB_cnt -tbl ensembl_genomes=ensembl_genomes -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --engine=InnoDB
-
- perl ./lib/CollectGenomes.pm --mode=del_nr_genomes -tbl nr_cnt=nr_ti_gi_fasta_InnoDB_cnt -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
-
- perl ./lib/CollectGenomes.pm --mode=del_total_genomes -tbl nr_cnt=nr_ti_gi_fasta_InnoDB_cnt -tbl ensembl_genomes=ensembl_genomes -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -en=InnoDB
-
- perl ./lib/CollectGenomes.pm --mode=print_nr_genomes -tbl ti_full_list=ti_full_list -tbl nr_ti_fasta=nr_ti_gi_fasta_InnoDB -o ./t/nr -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
-
- perl ./lib/CollectGenomes.pm --mode=merge_existing_genomes -tbl ti_full_list=ti_full_list --out=./t/nr -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
-
- Part VII -> download genomes from JGI: (not working)
-
- perl ./lib/CollectGenomes.pm --mode=jgi_download --names=names_martin7 -o ./xml/ -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v
-
- Part VIII -> prepare and run cd-hit
- perl ./bin/CollectGenomes.pm --mode=prepare_cdhit_per_phylostrata --in=./data_in/t_eukarya/ --out=./data_out/ -tbl phylo=phylo_7955 -ho localhost -d nr -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
- perl ./bin/CollectGenomes.pm --mode=prepare_cdhit_per_phylostrata --in=/home/msestak/dropbox/Databases/db_29_07_15/data/archaea/ --out=/home/msestak/dropbox/Databases/db_29_07_15/data/cdhit/ -ho localhost -d nr -u msandbox -p msandbox -po 5622 -s /tmp/mysql_sandbox5622.sock
-
-
- perl ./bin/CollectGenomes.pm --mode=run_cdhit --if=/home/msestak/dropbox/Databases/db_29_07_15/data/cdhit/cd_hit_cmds --out=/home/msestak/dropbox/Databases/db_29_07_15/data/cdhit/ -ho localhost -d nr -u msandbox -p msandbox -po 5622 -s /tmp/mysql_sandbox5622.sock -v
-
- Part VIII -> prepare BLAST and run it:
-
-=head1 DESCRIPTION
-
-CollectGenomes is modulino that downloads genomes (actually proteomes) from Ensembl FTP servers. It names them by tax_id.
-It can also download NCBI nr database and extract genomes from it (requires MySQL).
-It runs clustering with cd-hit and builds a BLAST database per species analyzed.
-
-To use different functionality use specific modes.
-Possible modes:
-
- create_db                     => \&create_database,
- ftp                           => \&ftp_robust,
- extract_nr                    => \&extract_nr,
- load_nr                       => \&load_nr,
- extract_and_load_nr           => \&extract_and_load_nr,
- gi_taxid                      => \&extract_and_load_gi_taxid,
- ti_gi_fasta                   => \&ti_gi_fasta,
- get_ensembl_genomes               => \&get_ensembl_genomes,
- import_names                  => \&import_names,
- import_nodes                  => \&import_nodes,
- get_missing_genomes           => \&get_missing_genomes,
- del_nr_genomes          => \&del_nr_genomes,
- del_total_genomes           => \&del_total_genomes,
- print_nr_genomes              => \&print_nr_genomes,
- merge_existing_genomes         => \&merge_existing_genomes,
- ensembl_vertebrates           => \&ensembl_vertebrates,
- ensembl_ftp                   => \&ensembl_ftp,
- prepare_cdhit_per_phylostrata => \&prepare_cdhit_per_phylostrata,
- run_cdhit                     => \&run_cdhit,
-
-For help write:
-
- perl CollectGenomes.pm -h
- perl CollectGenomes.pm -m
-
-=head1 EXAMPLE 02.09.2015 on tiktaalik
 
  ### Part 0 -> prepare the stage:
  # Step1: create a MySQL database named by date
@@ -6170,67 +6082,129 @@ For help write:
 
  # Step3: analyze database
  [msestak@tiktaalik data]$ AnalysePhyloDb -d ./all_ff/ -t 7955 -n ./nr_raw/nodes.dmp.fmt.new.sync > analyze_25244_genomes_danio
- [msestak@tiktaalik data]$ grep "<ps>" analyze_26575_genomes_danio > analyze_26575_genomes_danio.ps
- [msestak@tiktaalik data]$ grep -P "^\d+\t" analyze_26575_genomes_danio > analyze_26575_genomes_danio.genomes
- [msestak@tiktaalik data]$ wc -l analyze_26575_genomes_danio.genomes 
- #23923 analyze_26575_genomes_danio.genomes
+ [msestak@tiktaalik data]$ grep "<ps>" analyze_25244_genomes_danio > analyze_25244_genomes_danio.ps
+ [msestak@tiktaalik data]$ cat analyze_25244_genomes_danio.ps 
+ #<ps>	1	19665	131567
+ #<ps>	2	266	2759
+ #<ps>	3	13	1708629
+ #<ps>	4	1	1708631
+ #<ps>	5	787	33154
+ #<ps>	6	2	1708671
+ #<ps>	7	1	1708672
+ #<ps>	8	2	1708673
+ #<ps>	9	7	33208
+ #<ps>	10	1	6072
+ #<ps>	11	8	1708696
+ #<ps>	12	133	33213
+ #<ps>	13	2	33511
+ #<ps>	14	1	7711
+ #<ps>	15	3	1708690
+ #<ps>	16	1	7742
+ #<ps>	17	1	7776
+ #<ps>	18	0	117570
+ #<ps>	19	167	117571
+ #<ps>	20	0	7898
+ #<ps>	21	0	186623
+ #<ps>	22	1	41665
+ #<ps>	23	1	32443
+ #<ps>	24	1	1489341
+ #<ps>	25	22	186625
+ #<ps>	26	1	186634
+ #<ps>	27	0	32519
+ #<ps>	28	2	186626
+ #<ps>	29	0	186627
+ #<ps>	30	0	7952
+ #<ps>	31	0	30727
+ #<ps>	32	2	7953
+ #<ps>	33	0	7954
+ #<ps>	34	1	7955
+ [msestak@tiktaalik data]$ grep -P "^\d+\t" analyze_25244_genomes_danio > analyze_25244_genomes_danio.genomes
 
 
  # Step4: partition genomes per phylostrata for cdhit
- perl ./lib/CollectGenomes.pm --mode=prepare_cdhit_per_phylostrata --in=/home/msestak/dropbox/Databases/db_02_09_2015/data/all_ff/ --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ -tbl phylo=phylo_7955 -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
- #[2015/09/10 14:32:55,739]Report: 34 phylostrata:{ps1 ps2 ps3 ps4 ps5 ps6 ps7 ps8 ps9 ps10 ps11 ps12 ps13 ps14 ps15 ps16 ps17 ps18 ps19 ps20 ps21 ps22 ps23 ps24 ps25 ps26 ps27 ps28 ps29 ps30 ps31 ps32 ps33 ps34}
- #[2015/09/10 14:33:57,226]Action: table phylo_7955_copy inserted 1121881 rows!
- #[2015/09/10 14:35:01,741]Action: table phylo_7955_backup_24641 inserted 1121881 rows!
- #[2015/09/10 14:35:02,087]Action: dir /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit removed and cleaned
- #[2015/09/10 14:35:02,088]Action: dir /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit created empty
- #[2015/09/10 14:35:02,088]Action: dir /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps1 created
- #[2015/09/10 14:35:02,171]Action: File /home/msestak/dropbox/Databases/db_02_09_2015/data/all/100053 copied to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps1
- #Action: concatenated 24998 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps1.fa
- #Action: dir /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps1 removed
- #/home/msestak/kclust/cdhit/cd-hit-v4.6.1-2012-08-27/cd-hit -i /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps1.fa -o /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps1 -c 0.9 -n 5 -M 0 -T 0 -d 200
- #Action: TORQUE script printed to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps1.pbs
- #Action: concatenated 294 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps2.fa
- #Action: concatenated 14 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps3.fa
- #Action: concatenated 1 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps4.fa
- #Action: concatenated 886 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps5.fa
- #Action: concatenated 2 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps6.fa
- #Action: concatenated 1 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps7.fa
- #Action: concatenated 2 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps8.fa
- #Action: concatenated 7 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps9.fa
- #Action: concatenated 1 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps10.fa
- #Action: concatenated 8 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps11.fa
- #Action: concatenated 135 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps12.fa
- #Action: concatenated 2 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps13.fa
- #Action: concatenated 1 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps14.fa
- #Action: concatenated 3 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps15.fa
- #Action: concatenated 1 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps16.fa
- #Action: concatenated 1 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps17.fa
- #Action: concatenated 167 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps19.fa
- #Action: concatenated 1 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps22.fa
- #Action: concatenated 1 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps23.fa
- #Action: concatenated 1 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps24.fa
- #Action: concatenated 22 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps25.fa
- #Action: concatenated 1 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps26.fa
- #Action: concatenated 2 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps28.fa
- #Action: concatenated 2 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps32.fa
- #Action: concatenated 1 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ps34.fa
- #PS_NAMES:ps1 ps10 ps11 ps12 ps13 ps14 ps15 ps16 ps17 ps19 ps2 ps22 ps23 ps24 ps25 ps26 ps28 ps3 ps32 ps34 ps4 ps5 ps6 ps7 ps8 ps9
- #ALTER TABLE phylo_7955 DROP COLUMN ps18, DROP COLUMN ps20, DROP COLUMN ps21, DROP COLUMN ps27, DROP COLUMN ps29, DROP COLUMN ps30, DROP COLUMN ps31, DROP COLUMN ps33 
- #Action: table phylo_7955 altered:{ps18 ps20 ps21 ps27 ps29 ps30 ps31 ps33} dropped
- #DELETE ph FROM phylo_7955 AS ph
- #WHERE ps1 IS NULL AND ps10 IS NULL AND ps11 IS NULL AND ps12 IS NULL AND ps13 IS NULL AND ps14 IS NULL AND ps15 IS NULL AND ps16 IS NULL AND ps17 IS NULL AND ps19 IS NULL AND ps2 IS NULL AND ps22 IS NULL AND ps23 IS NULL AND ps24 IS NULL AND ps25 IS NULL AND ps26 IS NULL AND ps28 IS NULL AND ps3 IS NULL AND ps32 IS NULL AND ps34 IS NULL AND ps4 IS NULL AND ps5 IS NULL AND ps6 IS NULL AND ps7 IS NULL AND ps8 IS NULL AND ps9 IS NULL
- #Action: table phylo_7955 deleted 1283 rows
- #Report: table phylo_7955 has 1120598 rows
-
+ perl ./lib/CollectGenomes.pm --mode=prepare_cdhit_per_phylostrata --in=/home/msestak/dropbox/Databases/db_02_09_2015/data/all_ff/ --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/ -tbl phylo=phylo_7955 -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ #Report: 26 phylostrata:{ps1 ps2 ps3 ps4 ps5 ps6 ps7 ps8 ps9 ps10 ps11 ps12 ps13 ps14 ps15 ps16 ps17 ps19 ps22 ps23 ps24 ps25 ps26 ps28 ps32 ps34}
+ #Action: dir /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2 removed and cleaned
+ #Action: concatenated 23757 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/ps1.fa
+ #Action: concatenated 277 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/ps2.fa
+ #Action: concatenated 13 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/ps3.fa
+ #Action: concatenated 1 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/ps4.fa
+ #Report: ps4 has 1 genomes and is excluded for cdhit
+ #Action: File /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/ps4.fa renamed to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/ps4
+ #Action: concatenated 806 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/ps5.fa
+ #Action: concatenated 2 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/ps6.fa
+ #Action: concatenated 1 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/ps7.fa
+ #Action: concatenated 2 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/ps8.fa
+ #Action: concatenated 7 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/ps9.fa
+ #Action: concatenated 1 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/ps10.fa
+ #Action: concatenated 8 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/ps11.fa
+ #Action: concatenated 134 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/ps12.fa
+ #Action: concatenated 2 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/ps13.fa
+ #Action: concatenated 1 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/ps14.fa
+ #Action: concatenated 3 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/ps15.fa
+ #Action: concatenated 1 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/ps16.fa
+ #Action: concatenated 1 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/ps17.fa
+ #Action: concatenated 167 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/ps19.fa
+ #Action: concatenated 1 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/ps22.fa
+ #Action: concatenated 1 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/ps23.fa
+ #Action: concatenated 1 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/ps24.fa
+ #Action: concatenated 22 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/ps25.fa
+ #Action: concatenated 1 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/ps26.fa
+ #Action: concatenated 2 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/ps28.fa
+ #Action: concatenated 2 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/ps32.fa
+ #Action: concatenated 1 files to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/ps34.fa
+ 
  # Step5: run cdhit based on cd_hit_cmds file
- perl ./lib/CollectGenomes.pm --mode=run_cdhit --if=/home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/cd_hit_cmds --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit/ -ho localhost -d nr_2015_9_2  -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v
- #remove first and last phylostratum
+ [msestak@tiktaalik CollectGenomes]$ perl ./lib/CollectGenomes.pm --mode=run_cdhit --if=/home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/cd_hit_cmds_ps1 --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/
  #run ps1 separately
- #ignore last ps (input file - keep them all)
+ [msestak@cambrian-0-0 CollectGenomes]$ perl ./lib/CollectGenomes.pm --mode=run_cdhit --if=/home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/cd_hit_cmds --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/
 
  # Step5: combine all cdhit files into one db and replace J to * for BLAST
+ perl ./lib/CollectGenomes.pm --mode=cdhit_merge -i /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/ -of /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/blast_db_25_9_2015 -o /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/extracted
+ #Report: printed 985367 lines to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/blast_db_25_9_2015
+ #Report: printed 39 genomes to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/extracted
  
+ # Step6: add some additional genomes to database
+ perl ./lib/CollectGenomes.pm --mode=manual_add_fasta -if ./cdhit/V2.0.CommonC.pfasta -o ./cdhit/ -t 7962
+ #Report: transformed /msestak/gitdir/CollectGenomes/cdhit/V2.0.CommonC.pfasta to /msestak/gitdir/CollectGenomes/cdhit/7962 (46609 rows) with BLAST_format = true
 
+ # Step7: rum MakePhyloDb and AnalysePhyloDb again to get accurate info after cdhit
+
+=head1 DESCRIPTION
+
+CollectGenomes is modulino that downloads genomes (actually proteomes) from Ensembl FTP servers. It names them by tax_id.
+It can also download NCBI nr database and extract genomes from it (requires MySQL).
+It runs clustering with cd-hit and builds a BLAST database per species analyzed.
+
+To use different functionality use specific modes.
+Possible modes:
+
+ create_db                     => \&create_database,
+ ftp                           => \&ftp_robust,
+ extract_nr                    => \&extract_nr,
+ load_nr                       => \&load_nr,
+ extract_and_load_nr           => \&extract_and_load_nr,
+ gi_taxid                      => \&extract_and_load_gi_taxid,
+ ti_gi_fasta                   => \&ti_gi_fasta,
+ get_ensembl_genomes               => \&get_ensembl_genomes,
+ import_names                  => \&import_names,
+ import_nodes                  => \&import_nodes,
+ get_missing_genomes           => \&get_missing_genomes,
+ del_nr_genomes          => \&del_nr_genomes,
+ del_total_genomes           => \&del_total_genomes,
+ print_nr_genomes              => \&print_nr_genomes,
+ merge_existing_genomes         => \&merge_existing_genomes,
+ ensembl_vertebrates           => \&ensembl_vertebrates,
+ ensembl_ftp                   => \&ensembl_ftp,
+ prepare_cdhit_per_phylostrata => \&prepare_cdhit_per_phylostrata,
+ run_cdhit                     => \&run_cdhit,
+
+For help write:
+
+ perl CollectGenomes.pm -h
+ perl CollectGenomes.pm -m
+
+=head1 EXAMPLE 02.09.2015 on tiktaalik
 
  ALTERNATIVE with Deep:
  perl ./lib/CollectGenomes.pm --mode=create_db -ho localhost -d nr_2015_9_2 -p msandbox -u msandbox -po 5626 -s /tmp/mysql_sandbox5626.sock
@@ -6325,8 +6299,6 @@ For help write:
 
 
 
- perl ./lib/CollectGenomes.pm --mode=copy_external_genomes -tbl ti_full_list=ti_full_list -tbl names=names_raw_2015_9_3_new --in=/home/msestak/dropbox/Databases/db_29_07_15/data/eukarya --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/external/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
- perl ./lib/CollectGenomes.pm --mode=del_species_with_strain -tbl ti_full_list=ti_full_list -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
 
 
 =head1 LICENSE
