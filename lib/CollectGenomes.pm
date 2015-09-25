@@ -4331,7 +4331,7 @@ sub prepare_cdhit_per_phylostrata {
     };    #-- skip first column which is id auto_increment
     my @ps_columns = map { $_->[0] } @{ $dbh->selectall_arrayref($select_ps_columns) };
 	my $ps_num = @ps_columns;
-    $log->debug(qq|Report: $ps_num phylostrata:{@ps_columns}|);
+    $log->info(qq|Report: $ps_num phylostrata:{@ps_columns}|);
 
 	#	#make a backup copy of PHYLO table
 	#	my $ph_copy = create_table_copy( { ORIG => $PHYLO, %{$param_href} } );
@@ -4356,7 +4356,7 @@ sub prepare_cdhit_per_phylostrata {
         if ( -d $ps_path ) {
             path($ps_path)->remove_tree and $log->warn(qq|Action: dir $ps_path removed|);
         }
-        path( $ps_path )->mkpath and $log->trace(qq|Action: dir $ps_path created|);
+        path( $ps_path )->mkpath and $log->info(qq|Action: dir $ps_path created|);
 		
 		#if ti in this phylostratum copy it to this ps directory
         my $select_ti = sprintf( qq{
@@ -4398,7 +4398,7 @@ sub prepare_cdhit_per_phylostrata {
 		#my @ti_files = sort @ti_files;
 		if (@tis_in_psdir) {
 			catalanche(\@tis_in_psdir => $out_ps_full); 
-			$log->debug(qq|Action: concatenated $cnt_per_ps files to $out_ps_full|);
+			$log->info(qq|Action: concatenated $cnt_per_ps files to $out_ps_full|);
 		}
 
 		#clean ps directories
@@ -4414,7 +4414,7 @@ sub prepare_cdhit_per_phylostrata {
 		else {
 			$log->warn(qq|Report: $ps has $cnt_per_ps genomes and is excluded for cdhit|);
 			my $like_cdhit_name = path($OUT, $ps);
-			path($out_ps_full)->move($like_cdhit_name) and $log->debug(qq|Action: File $out_ps_full renamed to $like_cdhit_name|);
+			path($out_ps_full)->move($like_cdhit_name) and $log->info(qq|Action: File $out_ps_full renamed to $like_cdhit_name|);
 		}
     }
 
