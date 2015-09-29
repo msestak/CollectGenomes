@@ -5715,13 +5715,14 @@ sub cdhit_merge {
                    ) {
 
                     $line_cnt++;
-                    my $header    = $1;
-					my $full_header = '>' . $header;   #needed for db_fasta
-					my $ti = $2;
-                    my $fasta_seq = $3;
-                    $fasta_seq =~ s/\R//g;         #delete all vertical and horizontal space
-                    $fasta_seq = uc $fasta_seq;    #to uppercase
-                    $fasta_seq =~ tr{J}{*};        #return J to * for BLAST
+                    my $header      = $1;
+					my $full_header = '>' . $header;    #needed for db_fasta
+					$full_header    =~ s/\t+/ /g;       #delete tab between pgi_id and gene_name (blast error with tab in header)
+					my $ti          = $2;
+                    my $fasta_seq   = $3;
+                    $fasta_seq      =~ s/\R//g;         #delete all vertical and horizontal space
+                    $fasta_seq      = uc $fasta_seq;    #to uppercase
+                    $fasta_seq      =~ tr{J}{*};        #return J to * for BLAST
 
                     print $fasta_all_fh ( '>', $header, "\n", $fasta_seq, "\n" );
 

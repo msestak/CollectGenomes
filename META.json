@@ -34,6 +34,7 @@
       "develop" : {
          "requires" : {
             "Regexp::Debugger" : "0",
+            "Term::ReadKey" : "0",
             "Test::CPAN::Meta" : "0",
             "Test::MinimumVersion::Fast" : "0.04",
             "Test::PAUSE::Permissions" : "0.04",
@@ -65,6 +66,7 @@
             "Path::Tiny" : "0",
             "PerlIO::gzip" : "0",
             "Pod::Usage" : "0",
+            "XML::Twig" : "0",
             "autodie" : "0",
             "lib" : "0",
             "perl" : "5.010",
