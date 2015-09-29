@@ -5745,7 +5745,7 @@ sub cdhit_merge {
         }   #end FASTA
     }    #end foreach printing fasta
 
-    $log->info("Report: printed $total_cnt lines to $OUTFILE");
+    $log->info("Report: printed $total_cnt fasta records to $OUTFILE");
 
 	#print all genomes to $OUT
 	foreach my $ti_h (keys %db_fasta) {
@@ -5982,7 +5982,7 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
  #Copied 145 external genomes to /home/msestak/dropbox/Databases/db_02_09_2015/data/all
  #Copied 21067 Ensembl genomes to /home/msestak/dropbox/Databases/db_02_09_2015/data/all
 
- ### Part VIII -> prepare and run cd-hit
+ ### Part VII -> prepare and run cd-hit
  # Step1: run MakePhyloDb to get pgi||ti|pi|| identifiers (7h) and .ff extension
  [msestak@tiktaalik data]$ cp ./all_raw/ ./all_sync/
  [msestak@tiktaalik data]$ MakePhyloDb -d ./all_sync/
@@ -6093,14 +6093,23 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
 
  # Step5: combine all cdhit files into one db and replace J to * for BLAST
  perl ./lib/CollectGenomes.pm --mode=cdhit_merge -i /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/ -of /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/blast_db_25_9_2015 -o /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/extracted
- #Report: printed 985367 lines to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/blast_db_25_9_2015
- #Report: printed 39 genomes to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/extracted
+ #Report: printed 33141495 fasta records to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/blast_db_25_9_2015 (12.8GB)
+ #Report: printed 22272 genomes to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/extracted
  
  # Step6: add some additional genomes to database
  perl ./lib/CollectGenomes.pm --mode=manual_add_fasta -if ./cdhit/V2.0.CommonC.pfasta -o ./cdhit/ -t 7962
  #Report: transformed /msestak/gitdir/CollectGenomes/cdhit/V2.0.CommonC.pfasta to /msestak/gitdir/CollectGenomes/cdhit/7962 (46609 rows) with BLAST_format = true
 
  # Step7: rum MakePhyloDb and AnalysePhyloDb again to get accurate info after cdhit
+
+ ### Part VIII -> prepare for BLAST
+ # Step1: get longest splicing var
+ [msestak@tiktaalik in]$ SplicVar.pl -f Danio_rerio.GRCz10.pep.all.fa -l L > danio_splicvar 
+ [msestak@tiktaalik in]$ grep -c ">" Danio_rerio.GRCz10.pep.all.fa 
+ #44487
+ [msestak@tiktaalik in]$ grep -c ">" danio_splicvar
+ #25638
+
 
 =head1 DESCRIPTION
 
