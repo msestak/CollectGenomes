@@ -73,6 +73,7 @@ our @EXPORT_OK = qw{
 	prepare_cdhit_per_phylostrata
 	run_cdhit
 	cdhit_merge
+	del_after_analyze
 	manual_add_fasta
 	
 	};
@@ -163,6 +164,7 @@ sub main {
         prepare_cdhit_per_phylostrata => \&prepare_cdhit_per_phylostrata,
         run_cdhit                     => \&run_cdhit,
 		cdhit_merge                   => \&cdhit_merge,
+		del_after_analyze             => \&del_after_analyze,
 		manual_add_fasta              => \&manual_add_fasta,
 
     );
@@ -5787,6 +5789,74 @@ sub manual_add_fasta {
 }
 
 
+### INTERFACE SUB ###
+# Usage      : del_after_analyze( $param_href );
+# Purpose    : it deletes genomes that are found in directory of chice but are not found in AnalysePhyloDb output
+#            : probably put at 0 in nodes file
+# Returns    : nothing
+# Parameters : ( $param_href ) $IN for genomes directory, $INFILE for AnalysePhyloDb file and $OUT (deleted genomes destination)
+# Throws     : 
+# Comments   : genomes are not deleted but transfered to all_sync directory
+# See Also   : 
+sub del_after_analyze {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('del_after_analyze() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    my $IN     = $param_href->{IN}     or $log->logcroak('no $IN specified on command line!');
+    my $INFILE = $param_href->{INFILE} or $log->logcroak('no $INFILE specified on command line!');
+    my $OUT    = $param_href->{OUT}    or $log->logcroak('no $OUT specified on command line!');
+
+    #collect all cdhit output files
+    my @cdhit_in = File::Find::Rule->file()->name(qr/\A\d+\.ff\z/)->in($IN);
+	my $files_cnt = @cdhit_in;
+	$log->info("Report: found $files_cnt genomes in $IN");
+
+	#get all taxids from AnalysePhyloDb output file
+	open my $analyze_fh, "<", $INFILE or $log->logdie("Error: can't open $INFILE for reading:$!");
+	my @tis;
+	while (<$analyze_fh>) {
+		chomp;
+
+		if (/\A<ps>.+\z/) {
+			say $_;
+		}
+		else {
+			#line with genome info
+			my (undef, undef, undef, $ti) = split /\t+/, $_;
+			push @tis, $ti;
+		}
+
+	}
+
+	#put taxids as heys of hash for fast check of existence
+	my %tis_analyze = map {$_ => undef} @tis;
+	my $lines_cnt = @tis;
+	$log->info("Report: found $lines_cnt genomes in $INFILE");
+	
+	#move genomes not found in analyze file to #OUT
+	my $moved_cnt = 0;
+	foreach my $genome (@cdhit_in) {
+		my $ti_gen = path($genome)->basename;
+		$ti_gen =~ s/\.ff//;
+
+		if (exists $tis_analyze{$ti_gen}) {
+			#nothing
+		}
+		elsif (! exists $tis_analyze{$ti_gen}) {
+			my $moved_genome = path($OUT, $ti_gen)->canonpath;
+			path($genome)->move($moved_genome) and $log->debug("Action: moved $genome to $moved_genome");
+			$moved_cnt++;
+		}
+		else {
+			$log->error("Error: $genome not found in AnalysePhyloDb $INFILE");
+		}
+	}
+
+	$log->info("Report: removed $moved_cnt genomes out of $IN to $OUT");
+
+    return;
+}
 
 
 
@@ -6093,15 +6163,18 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
  [msestak@cambrian-0-0 CollectGenomes]$ perl ./lib/CollectGenomes.pm --mode=run_cdhit --if=/home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/cd_hit_cmds --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/
 
  # Step5: combine all cdhit files into one db and replace J to * for BLAST
- perl ./lib/CollectGenomes.pm --mode=cdhit_merge -i /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/ -of /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/blast_db_25_9_2015 -o /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/extracted
- #Report: printed 33141495 fasta records to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/blast_db_25_9_2015 (12.8GB)
- #Report: printed 22272 genomes to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/extracted
+ perl ./lib/CollectGenomes.pm --mode=cdhit_merge -i /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit_large/ -of /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit_large/blast_db -o /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit_large/extracted
+ #Report: printed 43923562 fasta records to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit_large/blast_db
+ #Report: printed 22290 genomes to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit_large/extracted
  
  # Step6: add some additional genomes to database
  perl ./lib/CollectGenomes.pm --mode=manual_add_fasta -if ./cdhit/V2.0.CommonC.pfasta -o ./cdhit/ -t 7962
  #Report: transformed /msestak/gitdir/CollectGenomes/cdhit/V2.0.CommonC.pfasta to /msestak/gitdir/CollectGenomes/cdhit/7962 (46609 rows) with BLAST_format = true
 
  # Step7: rum MakePhyloDb and AnalysePhyloDb again to get accurate info after cdhit
+ [msestak@tiktaalik data]$ MakePhyloDb -d ./cdhit_large/extracted/
+ [msestak@tiktaalik data]$ AnalysePhyloDb -d ./cdhit_large/extracted/ -t 7955 -n ./nr_raw/nodes.dmp.fmt.new.sync > analyze_cdhit_large
+ 
 
  ### Part VIII -> prepare for BLAST
  # Step1: get longest splicing var
@@ -6110,6 +6183,13 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
  #44487
  [msestak@tiktaalik in]$ grep -c ">" danio_splicvar
  #25638
+ perl ./lib/FastaSplit.pm -if /msestak/workdir/danio_dev_stages_phylo/in/dr_splicvar -name dr -o /msestak/workdir/danio_dev_stages_phylo/in/in_chunks_dr -n 50 -s 7000 -a
+ #Num of seq: 25638
+ #Num of chunks: 50
+ #Num of seq in chunk: 512
+ #Num of seq left without chunk: 38
+ #Larger than 7000 {7 seq}: 27765 22190 9786 8864 8710 8697 7035
+
 
 
 =head1 DESCRIPTION
