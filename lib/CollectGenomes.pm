@@ -5692,7 +5692,7 @@ sub cdhit_merge {
 	if (-f $OUTFILE) {
 		unlink $OUTFILE and $log->warn("Action: $OUTFILE exists. Unlinked!");
 	}
-    open my $fasta_all_fh, ">>", $OUTFILE or $log->logdie("Error: can't open or write to file:$OUTFILE $!");
+    open my $fasta_all_fh, ">>", $OUTFILE or $log->logdie("Error: can't open file for writing:$OUTFILE $!");
 
 	#hash of arefs to store full database and print it later
 	my %db_fasta;
@@ -5700,7 +5700,8 @@ sub cdhit_merge {
     #read each file, count fasta and append to OUTFILE
     my $total_cnt = 0;
     foreach my $ps_file (@cdhit_in) {
-        open my $in_fh,        "<",  $ps_file or $log->logdie("Error: can't open or read to file:$ps_file $!");
+        open my $in_fh, "<", $ps_file or $log->logdie("Error: can't open file for reading:$ps_file $!");
+		$log->info("Report: working on $ps_file");
 
 		FASTA: {
             #look in larger chunks between records
@@ -5708,6 +5709,7 @@ sub cdhit_merge {
             my $line_cnt = 0;
             while (<$in_fh>) {
                 chomp;
+				next if ($_ eq '');
 
                 if (m{\A(pgi\|\d+\|ti\|(\d+)\|(?:[^\v]+))        #pgi id till vertical whitespace
 						\v                #vertical space
@@ -5716,19 +5718,17 @@ sub cdhit_merge {
 
                     $line_cnt++;
                     my $header      = $1;
-					my $full_header = '>' . $header;    #needed for db_fasta
-					$full_header    =~ s/\t+/ /g;       #delete tab between pgi_id and gene_name (blast error with tab in header)
 					my $ti          = $2;
-                    my $fasta_seq   = $3;
+                    my $fasta_seq   = $3;   #put captures to variables ASAP!!! then clean them
+					$header         =~ s/\t+/ /g;       #delete tab between pgi_id and gene_name (blast error with tab in header)
+					my $full_header = '>' . $header;    #needed for db_fasta
                     $fasta_seq      =~ s/\R//g;         #delete all vertical and horizontal space
                     $fasta_seq      = uc $fasta_seq;    #to uppercase
                     $fasta_seq      =~ tr{J}{*};        #return J to * for BLAST
 
-                    print $fasta_all_fh ( '>', $header, "\n", $fasta_seq, "\n" );
+                    print {$fasta_all_fh} $full_header, "\n", $fasta_seq, "\n";
 
-					#push fasta into hash
-					#$db_fasta{$ti} = [ $full_header . "\n" . $fasta_seq ];
-					#$db_fasta{$ti} = [ ];
+					#push fasta into hash (all sequences for specific organism into one array_ref)
 					push @{ $db_fasta{$ti} }, $full_header . "\n" . $fasta_seq . "\n";
 					#say Dumper(\%db_fasta);
 
@@ -5740,7 +5740,7 @@ sub cdhit_merge {
             }    #end while
 
             if ($line_cnt) {
-                $log->debug(qq|Action: read cdhit fasta file:$ps_file with $line_cnt lines and appended to $OUTFILE|);
+                $log->debug(qq|Action: cdhit fasta file:$ps_file with $line_cnt lines appended to $OUTFILE|);
                 $total_cnt += $line_cnt;
             }
         }   #end FASTA
