@@ -5819,7 +5819,7 @@ sub del_after_analyze {
 		chomp;
 
 		if (/\A<ps>.+\z/) {
-			say $_;
+			$log->trace($_);
 		}
 		else {
 			#line with genome info
@@ -6123,6 +6123,11 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
  #<ps>	34	1	7955
  [msestak@tiktaalik data]$ grep -P "^\d+\t" analyze_25244_genomes_danio > analyze_25244_genomes_danio.genomes
 
+ # Step 3b: remove genomes found in all_ff directory but not found in AnalysePhyloDb file (not found in nodes.dmp.fmt.new.sync because at 0) -> deleted before
+ perl ./lib/CollectGenomes.pm --mode=del_after_analyze -i /home/msestak/dropbox/Databases/db_02_09_2015/data/all_ff/ -if /home/msestak/dropbox/Databases/db_02_09_2015/data/analyze_all_ff -o /home/msestak/dropbox/Databases/db_02_09_2015/data/all_sync/
+ #Report: found 25244 genomes in /home/msestak/dropbox/Databases/db_02_09_2015/data/all_ff
+ #Report: found 25224 genomes in /home/msestak/dropbox/Databases/db_02_09_2015/data/analyze_all_ff
+ #Report: removed 20 genomes out of /home/msestak/dropbox/Databases/db_02_09_2015/data/all_ff to /home/msestak/dropbox/Databases/db_02_09_2015/data/all_sync
 
  # Step4: partition genomes per phylostrata for cdhit
  perl ./lib/CollectGenomes.pm --mode=prepare_cdhit_per_phylostrata --in=/home/msestak/dropbox/Databases/db_02_09_2015/data/all_ff/ --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit2/ -tbl phylo=phylo_7955 -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
@@ -6164,7 +6169,7 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
 
  # Step5: combine all cdhit files into one db and replace J to * for BLAST
  perl ./lib/CollectGenomes.pm --mode=cdhit_merge -i /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit_large/ -of /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit_large/blast_db -o /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit_large/extracted
- #Report: printed 43923562 fasta records to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit_large/blast_db
+ #Report: printed 43923562 fasta records to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit_large/blast_db (18.1 GB)
  #Report: printed 22290 genomes to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit_large/extracted
  
  # Step6: add some additional genomes to database
@@ -6174,7 +6179,19 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
  # Step7: rum MakePhyloDb and AnalysePhyloDb again to get accurate info after cdhit
  [msestak@tiktaalik data]$ MakePhyloDb -d ./cdhit_large/extracted/
  [msestak@tiktaalik data]$ AnalysePhyloDb -d ./cdhit_large/extracted/ -t 7955 -n ./nr_raw/nodes.dmp.fmt.new.sync > analyze_cdhit_large
- 
+
+ [msestak@tiktaalik data]$ MakePhyloDb -d ./cdhit_large/extracted/
+ [msestak@tiktaalik data]$ AnalysePhyloDb -d ./cdhit_large/extracted/ -t 7955 -n ./nr_raw/nodes.dmp.fmt.new.sync > analyze_cdhit_large
+ [msestak@tiktaalik data]$ grep -P "^\d+\t" analyze_cdhit_large > analyze_cdhit_large.genomes
+ [msestak@tiktaalik data]$ wc -l analyze_cdhit_large.genomes 
+ #22290 analyze_cdhit_large.genomes
+ [msestak@tiktaalik data]$ mkdir ./cdhit_large/surplus
+ perl ./lib/CollectGenomes.pm --mode=del_after_analyze -i /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit_large/extracted/ -if /home/msestak/dropbox/Databases/db_02_09_2015/data/analyze_cdhit_large -o /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit_large/surplus/
+ #Report: found 22290 genomes in /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit_large/extracted
+ #Report: found 22290 genomes in /home/msestak/dropbox/Databases/db_02_09_2015/data/analyze_cdhit_large
+ #Report: removed 0 genomes out of /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit_large/extracted to /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit_large/surplus
+
+
 
  ### Part VIII -> prepare for BLAST
  # Step1: get longest splicing var
