@@ -2530,18 +2530,22 @@ sub run_mysqldump {
     #capture output of mysqldump command
     my ( $stdout_dry, $stderr_dry, $exit_dry ) = capture_output( $cmd_dry, $param_href );
     if ( $exit_dry == 0 ) {
+        $log->error("Action: printing STDERR:$stderr_dry");
         $log->info("Action: database $DATABASE schema backup succeeded at $target_dry");
     }
     else {
-        $log->error("Action: database $DATABASE schema backup succeeded at $target_dry");
+        $log->error("Action: printing STDERR:$stderr_dry");
+        $log->error("Action: database $DATABASE schema backup FAILED at $target_dry");
     }
 
     my ( $stdout, $stderr, $exit ) = capture_output( $cmd, $param_href );
     if ( $exit == 0 ) {
+        $log->error("Action: printing STDERR:$stderr");
         $log->info("Action: database $DATABASE table backup succeeded at $target");
     }
     else {
-        $log->error("Action: database $DATABASE table backup succeeded at $target");
+        $log->error("Action: printing STDERR:$stderr");
+        $log->error("Action: database $DATABASE table backup FAILED at $target");
     }
 
     return;
