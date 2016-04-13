@@ -6211,7 +6211,8 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
  #Num of seq left without chunk: 38
  #Larger than 7000 {7 seq}: 27765 22190 9786 8864 8710 8697 7035
 
-
+ ### Part IX -> backup a database
+ /home/msestak/gitdir/CollectGenomes/lib/CollectGenomes.pm --mode=mysqldump -d blastdb -o . -u msandbox --password=msandbox --port=5622 --socket=/tmp/mysql_sandbox5622.sock -v -v
 
 =head1 DESCRIPTION
 
