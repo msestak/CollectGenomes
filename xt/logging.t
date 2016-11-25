@@ -18,7 +18,7 @@ my @subs = qw( main init_logging capture_output get_parameters_from_cmd);
 use_ok( $module, @subs);
 
 #testing init_logging()
-init_logging();
+init_logging({verbose => 2});
 
 # get the loggers
 my $log  = Log::Log4perl->get_logger("main");

@@ -3126,21 +3126,6 @@ sub del_nr_genomes {
 }
 
 
-=for Example:
-
- [2015/09/08 11:53:20,978]Report: found match for:{Burkholderia_xenovorans} in:{Burkholderia_xenovorans_LB400}
- $VAR1 = {
-           'Burkholderia_xenovorans' => [
-                                          'Burkholderia_xenovorans',
-                                          'Burkholderia_xenovorans_LB400'
-                                        ]
-         };
- [2015/09/08 11:53:20,978]Action: deleting:Burkholderia_xenovorans
- [2015/09/08 11:53:20,979]Action: table nr_ti_gi_fasta_Deep_cnt deleted 1 rows for:{Burkholderia_xenovorans}
- no match for:Burkholderia_xenovorans_LB400 in {Burkholderia_xenovorans}
-
-=cut
-
 ### INTERFACE SUB ###
 # Usage      : del_total_genomes( $param_href );
 # Purpose    : deletes TOTAL species genomes that have subspecies or strain genomes (second step)
@@ -6340,19 +6325,16 @@ For help write:
  perl ./lib/CollectGenomes.pm --mode=print_nr_genomes -tbl ti_full_list=ti_full_list -tbl nr_ti_fasta=nr_ti_gi_fasta_Deep -o /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_genomes/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5626 -s /tmp/mysql_sandbox5626.sock
 
 
-
-
-
-
 =head1 LICENSE
 
-Copyright (C) MOCNII Martin Sebastijan Šestak
+Copyright (C) Martin Sebastijan Šestak.
 
 This library is free software; you can redistribute it and/or modify
 it under the same terms as Perl itself.
 
 =head1 AUTHOR
 
-mocnii E<lt>msestak@irb.hrE<gt>
+Martin Sebastijan Šestak E<lt>msestak@irb.hrE<gt>
 
 =cut
+

@@ -1,10 +1,10 @@
 {
    "abstract" : "Downloads genomes from Ensembl FTP (and NCBI nr db) and builds BLAST database (this is modulino - call it directly).",
    "author" : [
-      "mocnii <msestak@irb.hr>"
+      "Martin Sebastijan Šestak <msestak@irb.hr>"
    ],
    "dynamic_config" : 0,
-   "generated_by" : "Minilla/v2.5.0, CPAN::Meta::Converter version 2.143240",
+   "generated_by" : "Minilla/v3.0.4, CPAN::Meta::Converter version 2.150010",
    "license" : [
       "perl_5"
    ],
@@ -69,7 +69,7 @@
             "XML::Twig" : "0",
             "autodie" : "0",
             "lib" : "0",
-            "perl" : "5.010",
+            "perl" : "5.010001",
             "strict" : "0",
             "warnings" : "0"
          }
@@ -90,5 +90,6 @@
    "version" : "0.01",
    "x_contributors" : [
       "mocnii <sestakm@yahoo.com>"
-   ]
+   ],
+   "x_serialization_backend" : "JSON::PP version 2.27400"
 }
