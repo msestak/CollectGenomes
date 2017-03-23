@@ -1168,6 +1168,7 @@ sub ensembl_ftp {
 	my $table_info = "species_ensembl_divisions$$";
 	my $create_info = sprintf( qq{
     CREATE TABLE %s (
+	id INT UNSIGNED AUTO_INCREMENT NOT NULL,
 	species_name VARCHAR(200) NOT NULL,
 	species VARCHAR(200) NOT NULL,
 	division VARCHAR(50) NOT NULL,
@@ -1180,11 +1181,12 @@ sub ensembl_ftp {
 	peptide_compara CHAR(1) NOT NULL,
 	genome_alignments CHAR(1) NOT NULL,
 	other_alignments CHAR(1) NOT NULL,
-	core_db VARCHAR(50) NOT NULL,
+	core_db VARCHAR(200) NOT NULL,
 	species_id INT UNSIGNED NOT NULL,
 	invis VARCHAR(10),
     PRIMARY KEY(ti, species),
-	KEY(species)
+	KEY(species),
+	KEY(id)
     )ENGINE=$ENGINE CHARSET=ascii }, $dbh->quote_identifier($table_info) );
 	create_table( { TABLE_NAME => $table_info, DBH => $dbh, QUERY => $create_info, %{$param_href} } );
 
@@ -1227,6 +1229,7 @@ sub ensembl_ftp {
     		LOAD DATA INFILE '$info_local'
 			INTO TABLE $table_info
 			IGNORE 1 LINES
+			(species_name, species, division, ti, assembly, assembly_accession, genebuild, variation, pan_compara, peptide_compara, genome_alignments, other_alignments, core_db, species_id, invis)
     		};
     		eval { $dbh->do($load_info, { async => 1 } ) };
 			my $rows_info = $dbh->mysql_async_result;
@@ -1236,12 +1239,8 @@ sub ensembl_ftp {
 			#DELETE genomes with same tax_ids
 			my $delete_dup = qq{
 			DELETE ens FROM $table_info AS ens
-			WHERE ti IN (SELECT ti 
-						 FROM (SELECT ti, COUNT(ti) as cnt 
-			             FROM $table_info
-						 GROUP BY ti
-						 HAVING cnt > 1) AS x)
-    		};
+			INNER JOIN $table_info AS ens2 ON ens.ti = ens2.ti
+			WHERE ens.id > ens2.id};
     		eval { $dbh->do($delete_dup, { async => 1 } ) };
 			my $rows_dup = $dbh->mysql_async_result;
     		$log->debug( "Action: $table_info deleted with $rows_dup rows!" ) unless $@;

@@ -83,8 +83,14 @@
    },
    "release_status" : "unstable",
    "resources" : {
+      "bugtracker" : {
+         "web" : "https://github.com/msestak/CollectGenomes/issues"
+      },
+      "homepage" : "https://github.com/msestak/CollectGenomes",
       "repository" : {
-         "url" : "https://mocnii@bitbucket.org/mocnii/collectgenomes.git"
+         "type" : "git",
+         "url" : "git://github.com/msestak/CollectGenomes.git",
+         "web" : "https://github.com/msestak/CollectGenomes"
       }
    },
    "version" : "0.01",
