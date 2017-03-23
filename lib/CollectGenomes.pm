@@ -4,7 +4,6 @@ package CollectGenomes;
 use 5.010001;
 use strict;
 use warnings;
-use autodie;
 no warnings 'experimental::smartmatch';   #for when
 use Exporter qw/import/;
 use Carp;
@@ -28,6 +27,7 @@ use HTML::TreeBuilder;
 use LWP::Simple;
 use DateTime::Tiny;
 use XML::Twig;
+use Parallel::ForkManager;
 
 our $VERSION = "0.01";
 
@@ -75,6 +75,7 @@ our @EXPORT_OK = qw{
 	cdhit_merge
 	del_after_analyze
 	manual_add_fasta
+	download_from_stats
 	
 	};
 
@@ -166,7 +167,7 @@ sub main {
 		cdhit_merge                   => \&cdhit_merge,
 		del_after_analyze             => \&del_after_analyze,
 		manual_add_fasta              => \&manual_add_fasta,
-
+        download_from_stats           => \&download_from_stats,
     );
 
 
@@ -482,21 +483,21 @@ sub create_db {
 # See Also   :
 sub capture_output {
     my $log = Log::Log4perl::get_logger("main");
-    $log->logdie( 'capture_output() needs a $cmd' ) unless (@_ ==  2 or 1);
-    my ($cmd, $param_href) = @_;
+    $log->logdie('capture_output() needs a $cmd') unless ( @_ == 2 or 1 );
+    my ( $cmd, $param_href ) = @_;
 
-    my $VERBOSE = defined $param_href->{VERBOSE}  ? $param_href->{VERBOSE}  : undef;   #default is silent
+    my $VERBOSE = defined $param_href->{VERBOSE} ? $param_href->{VERBOSE} : undef;    #default is silent
     $log->info(qq|Report: COMMAND is: $cmd|);
 
     my ( $stdout, $stderr, $exit ) = capture {
         system($cmd );
     };
 
-    if ($VERBOSE) {
-        $log->trace( 'STDOUT is: ', "$stdout", "\n", 'STDERR  is: ', "$stderr", "\n", 'EXIT   is: ', "$exit" );
-    }
+    #if ($VERBOSE) {
+    #    $log->trace( 'STDOUT is: ', "$stdout", "\n", 'STDERR  is: ', "$stderr", "\n", 'EXIT   is: ', "$exit" );
+    #}
 
-    return  $stdout, $stderr, $exit;
+    return $stdout, $stderr, $exit;
 }
 
 
@@ -734,7 +735,10 @@ sub ftp_get_proteome {
 	$log->trace("Report: location: ", $ftp->pwd() );
 	
 	my $spec_path = path($species_dir, 'pep');
-	$ftp->cwd($spec_path) or $log->logdie( qq|Can't change working directory to $spec_path:|, $ftp->message );
+	unless ($ftp->cwd($spec_path)) {
+		$log->fatal( qq|Can't change working directory to $spec_path:|, $ftp->message );
+		return;
+	}
 	
 	#get taxid based on name of species_dir (for final output file)
 	my $get_taxid_query = sprintf(qq{
@@ -764,16 +768,6 @@ sub ftp_get_proteome {
 	    next FILE unless $proteome =~ m/pep.all.fa.gz\z/;
 		my $local_file = path($OUT, $proteome);
 
-		#delete gzip file if it exists
-		if (-f $local_file) {
-			unlink $local_file and $log->warn( "Action: unlinked $local_file" );
-		}
-
-		#opens a filehandle to $OUT dir and downloads file there
-		#Net::FTP get(REMOTE_FILE, LOCAL_FILE) accepts filehandle as LOCAL_FILE.
-		open my $local_fh, ">", $local_file or $log->logdie( "Can't write to $local_file:$!" );
-		$ftp->get($proteome, $local_fh) and $log->info( "Action: download to $local_file" );
-
 		#print stats and go up 2 dirs
         my $stat_file = path($OUT)->parent;
         $stat_file = path( $stat_file, 'statistics_ensembl_all.txt' )->canonpath;
@@ -781,67 +775,10 @@ sub ftp_get_proteome {
             $log->warn("Action: STAT file:$stat_file already exists: appending");
         }
         open my $stat_fh, '>>', $stat_file or die "can't open file: $!";
-		print {$stat_fh} path($REMOTE_HOST, $REMOTE_DIR, $spec_path, $proteome), "\t", $local_file, "\t";
+		print {$stat_fh} path($REMOTE_HOST, $ftp->pwd(), $proteome), "\t$REMOTE_HOST\t", $ftp->pwd(), "\t$proteome\n";
 		$ftp->cdup();   #go 2 dirs up to $REMOTE_DIR (cdup = current dir up)
 		$ftp->cdup();   #cwd goes only down or cwd(..) goes to parent (cwd() goes to root)
 
-		#extract file from archive
-		my $ae = Archive::Extract->new( archive => "$local_file" );
-		my $ae_path;
-		my $ok = do {
-			$ae->extract(to => $OUT) or $log->logdie( $ae->error );
-			my $ae_file = $ae->files->[0];
-			$ae_path = path($OUT, $ae_file);
-			$log->info( "Action: extracted to $ae_path" );
-		};
-		#delete gziped file
-		unlink $local_file and $log->trace( qq|Action: unlinked $local_file| );
-
-
-		#BLOCK for writing proteomes to taxid file
-		{
-			open my $extracted_fh, "<", $ae_path  or $log->logdie( "Can't open $ae_path: $!" );
-			my $path_taxid = path($OUT, $tax_id);
-	    	open my $genome_ti_fh, ">", $path_taxid or $log->logdie( "Can't write $tax_id: $!" );
-	    	
-	    	#return $/ value to newline for $header_first_line
-	    	local $/ = "\n";
-	    	my $header_first_line = <$extracted_fh>;
-			chomp $header_first_line;
-	    	print {$stat_fh} $header_first_line, "\t";
-	    	
-	    	#return to start of file
-	    	seek $extracted_fh, 0, 0;
-
-	    	#look in larger chunks between records
-	    	local $/ = ">";
-	    	my $line_count = 0;
-	    	while (<$extracted_fh>) {
-				chomp;
-	    		$line_count++;
-	
-	    		if (m/\A([^\h]+)(?:\h+)*(?:[^\v]+)*\v(.+)/s) {
-	
-					my $header = $1;
-	
-					my $fasta_seq = $2;
-	    			$fasta_seq =~ s/\R//g;  #delete multiple newlines
-					$fasta_seq = uc $fasta_seq;
-					$fasta_seq =~ tr{*}{J};
-					$fasta_seq =~ tr{A-Z}{}dc;
-	  
-	    			print $genome_ti_fh ('>', $header, "\n", $fasta_seq, "\n");
-				}
-			}   #end while
-
-			if ($line_count) {
-				$line_count--;   #it has one line to much
-				$log->debug( qq|Action: saved to $path_taxid with $line_count lines| );
-				print {$stat_fh} $line_count, "\n";
-			}
-		}   #block writing proteomes to taxid end
-
-		unlink $ae_path and $log->trace( qq|Action: unlinked $ae_path| );
 	}   #foreach FILE end
 
 	return;
@@ -5847,6 +5784,142 @@ sub del_after_analyze {
     return;
 }
 
+
+### INTERFACE SUB ###
+# Usage      : download_from_stats(
+#            : { DIR => $species_dir_out, STATS => $stats_file, TABLE => $table_ensembl_end, DBH => $dbh, %{$param_href} } );
+# Purpose    : downloads proteomes from statistics file
+# Returns    : nothing
+# Parameters : hash_ref
+# Throws     : 
+# Comments   : 
+# See Also   : 
+sub download_from_stats {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('download_from_stats() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    my $OUT        = $param_href->{OUT}         or $log->logcroak('no $OUT specified on command line!');
+    my $stats_file = $param_href->{INFILE}      or $log->logcroak('no $INFILE specified on command line!');
+    my $DATABASE   = $param_href->{DATABASE}    or $log->logcroak('no $DATABASE specified on command line!');
+    my %TABLES     = %{ $param_href->{TABLES} } or $log->logcroak('no %TABLES specified on command line!');
+    my $table_info = $TABLES{info};
+
+    # get new handle
+    my $dbh = dbi_connect($param_href);
+
+    # get taxid based on name of species_dir (for final output file)
+    my $get_taxid_query = sprintf(
+        qq{
+    SELECT ti
+    FROM %s
+    WHERE species = ?}, $dbh->quote_identifier($table_info)
+    );
+    my $sth = $dbh->prepare($get_taxid_query);
+
+    # read stats file to get remote locations
+    open my $stat_fh, "<", $stats_file or $log->logdie("Error: can't open $stats_file for reading: $!");
+    my %remote_files;
+    while (<$stat_fh>) {
+        chomp $_;
+        my ( $file_loc, $host, $dir_loc, $file_name ) = split "\t", $_;
+
+        #/pub/release-34/bacteria/fasta/bacteria_10_collection/candidatus_desulforudis_audaxviator_mp104c/pep
+        ( my $species_dir ) = $dir_loc =~ m{\A.+/([^/]+)/pep\z};
+        print "{$species_dir}\n";
+
+        # get tax_id from database
+        $sth->execute($species_dir);
+        my $tax_id;
+        $sth->bind_col( 1, \$tax_id, { TYPE => 'integer' } );
+        $sth->fetchrow_arrayref();
+        say "{$tax_id}";
+        $sth->finish;
+
+        # write to hash to retrieve later
+        $remote_files{$tax_id} = [ $file_loc, $file_name ];
+
+        say "$remote_files{$tax_id}->[0]";
+        say "$remote_files{$tax_id}->[1]";
+    }
+
+    print Dumper( \%remote_files );
+    $dbh->disconnect;
+
+    my $max_processes = 10;
+    my $pm            = Parallel::ForkManager->new($max_processes);
+  LOOP:
+    foreach my $ti ( keys %remote_files ) {
+        my $pid = $pm->start and next LOOP;
+
+        # create path to local file
+        my $local_file = path( $OUT, $remote_files{$ti}->[1] );
+
+        # delete gzip file if it exists
+        if ( -f $local_file ) {
+            unlink $local_file and $log->warn("Action: unlinked $local_file");
+        }
+
+        # download file
+        my $remote_link = 'ftp://' . "$remote_files{$ti}->[0]";
+        say "remote_link:$remote_link";
+        my $cmd = "wget -c $remote_link -O $local_file";
+        my ( $stdout, $stderr, $exit ) = capture_output( $cmd, $param_href );
+
+        # extract file from archive
+        my $ae = Archive::Extract->new( archive => "$local_file" );
+        my $ae_path;
+        my $ok = do {
+            $ae->extract( to => $OUT ) or $log->logdie( $ae->error );
+            my $ae_file = $ae->files->[0];
+            $ae_path = path( $OUT, $ae_file );
+            $log->info("Action: extracted to $ae_path");
+        };
+
+        # delete gziped file
+        unlink $local_file and $log->trace(qq|Action: unlinked $local_file|);
+
+        #BLOCK for writing proteomes to taxid file
+        {
+            open my $extracted_fh, "<", $ae_path or $log->logdie("Can't open $ae_path: $!");
+            my $path_taxid = path( $OUT, $ti );
+            open my $genome_ti_fh, ">", $path_taxid or $log->logdie("Can't write $ti: $!");
+
+            #look in larger chunks between records
+            local $/ = ">";
+            my $line_count = 0;
+            while (<$extracted_fh>) {
+                chomp;
+                $line_count++;
+
+                if (m/\A([^\h]+)(?:\h+)*(?:[^\v]+)*\v(.+)/s) {
+
+                    my $header    = $1;
+                    my $fasta_seq = $2;
+                    $fasta_seq =~ s/\R//g;    #delete multiple newlines
+                    $fasta_seq = uc $fasta_seq;
+                    $fasta_seq =~ tr{*}{J};
+                    $fasta_seq =~ tr{A-Z}{}dc;
+
+                    print $genome_ti_fh ( '>', $header, "\n", $fasta_seq, "\n" );
+                }
+            }    #end while
+
+            if ($line_count) {
+                $line_count--;    #it has one line to much
+                $log->debug(qq|Action: saved to $path_taxid with $line_count lines|);
+            }
+        }    #block writing proteomes to taxid end
+
+        unlink $ae_path and $log->trace(qq|Action: unlinked $ae_path|);
+
+        $pm->finish;    # Terminates the child process
+    }
+    $pm->wait_all_children;
+
+    return;
+
+}
 
 
 
