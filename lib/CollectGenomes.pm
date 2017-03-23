@@ -5826,30 +5826,39 @@ sub download_from_stats {
 
         #/pub/release-34/bacteria/fasta/bacteria_10_collection/candidatus_desulforudis_audaxviator_mp104c/pep
         ( my $species_dir ) = $dir_loc =~ m{\A.+/([^/]+)/pep\z};
-        print "{$species_dir}\n";
 
         # get tax_id from database
         $sth->execute($species_dir);
         my $tax_id;
         $sth->bind_col( 1, \$tax_id, { TYPE => 'integer' } );
         $sth->fetchrow_arrayref();
-        say "{$tax_id}";
         $sth->finish;
 
         # write to hash to retrieve later
         $remote_files{$tax_id} = [ $file_loc, $file_name ];
-
-        say "$remote_files{$tax_id}->[0]";
-        say "$remote_files{$tax_id}->[1]";
     }
-
-    print Dumper( \%remote_files );
     $dbh->disconnect;
 
+	#get all existing genomes from $OUT
+	my @ti_files = File::Find::Rule->file()
+								   ->maxdepth(1)
+								   ->name(qr/\A\d+\z/)
+								   ->in($OUT);
+	@ti_files = sort {$a cmp $b} @ti_files;
+	#print Dumper(\@ti_files);
+	my @external_tis = map {path($_)->basename} @ti_files;
+	#print Dumper(\@external_tis);
+
+	# start download of files if not already present
     my $max_processes = 10;
     my $pm            = Parallel::ForkManager->new($max_processes);
   LOOP:
     foreach my $ti ( keys %remote_files ) {
+		# check for existence of files on disk
+		if (grep {$_ == $ti} @external_tis) {
+			$log->debug("Action: skipping $ti") and next LOOP;
+		}
+
         my $pid = $pm->start and next LOOP;
 
         # create path to local file
@@ -5862,7 +5871,6 @@ sub download_from_stats {
 
         # download file
         my $remote_link = 'ftp://' . "$remote_files{$ti}->[0]";
-        say "remote_link:$remote_link";
         my $cmd = "wget -c $remote_link -O $local_file";
         my ( $stdout, $stderr, $exit ) = capture_output( $cmd, $param_href );
 
@@ -5945,7 +5953,11 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
  ### Part I -> download genomes from Ensembl:
  # Step 1: download protists, fungi, metazoa and bacteria (21085)
  perl ./lib/CollectGenomes.pm --mode=ensembl_ftp --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/ensembl_ftp/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
- # Step2: download vertebrates
+
+ # Step 2: download proteomes
+ CollectGenomes.pm --mode=download_from_stats --out=/msestak/workdir/nr_22_03_2017/data/ensembl_ftp/ --infile=/msestak/workdir/nr_22_03_2017/statistics_ensembl_all.txt --tables info=species_ensembl_divisions25579 -ho localhost -d nr_22_03_2017 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v -v
+
+ # Step 3: download vertebrates
  #need to scrape HTML to get to taxids in order to download vertebrates from Ensembl (+78 = total 21163) downloaded 67 vertebrates + 2 (S.cerevisiae and C. elegans) + 27 PRE (but duplicates (real 11))
  perl ./lib/CollectGenomes.pm --mode=ensembl_vertebrates --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/ensembl_vertebrates/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
  #copy ensembl proteomes to ensembl_all (7 min)
