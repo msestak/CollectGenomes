@@ -807,6 +807,7 @@ sub ftp_get_proteome {
 	    	#return $/ value to newline for $header_first_line
 	    	local $/ = "\n";
 	    	my $header_first_line = <$extracted_fh>;
+			chomp $header_first_line;
 	    	print {$stat_fh} $header_first_line, "\t";
 	    	
 	    	#return to start of file
