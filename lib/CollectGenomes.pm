@@ -352,9 +352,22 @@ sub init_logging {
     #                              Log::Log4perl Conf                             #
     ###############################################################################
     # Configuration in a string ...
-    my $conf = qq(
-      log4perl.category.main              = $log_level, Logfile, Screen
-     
+    my $conf = qq( 
+	  log4perl.category.main                   = TRACE, Logfile, Screen
+
+	  # Filter range from TRACE up
+	  log4perl.filter.MatchTraceUp               = Log::Log4perl::Filter::LevelRange
+      log4perl.filter.MatchTraceUp.LevelMin      = TRACE
+      log4perl.filter.MatchTraceUp.LevelMax      = FATAL
+      log4perl.filter.MatchTraceUp.AcceptOnMatch = true
+
+      # Filter range from $log_level up
+      log4perl.filter.MatchLevelUp               = Log::Log4perl::Filter::LevelRange
+      log4perl.filter.MatchLevelUp.LevelMin      = $log_level
+      log4perl.filter.MatchLevelUp.LevelMax      = FATAL
+      log4perl.filter.MatchLevelUp.AcceptOnMatch = true
+      
+	  # setup of file log
       log4perl.appender.Logfile           = Log::Log4perl::Appender::File
       log4perl.appender.Logfile.filename  = $logfile
       log4perl.appender.Logfile.mode      = append
@@ -362,12 +375,15 @@ sub init_logging {
       log4perl.appender.Logfile.umask     = 0022
       log4perl.appender.Logfile.header_text = INVOCATION:$0 @ARGV
       log4perl.appender.Logfile.layout    = Log::Log4perl::Layout::PatternLayout
-      log4perl.appender.Logfile.layout.ConversionPattern = [%d{yyyy/MM/dd HH:mm:ss,SSS}]%m%n
-     
+      log4perl.appender.Logfile.layout.ConversionPattern = [%d{yyyy/MM/dd HH:mm:ss,SSS}]%5p> %M line:%L==>%m%n
+	  log4perl.appender.Logfile.Filter    = MatchTraceUp
+      
+	  # setup of screen log
       log4perl.appender.Screen            = Log::Log4perl::Appender::ScreenColoredLevels
       log4perl.appender.Screen.stderr     = 1
       log4perl.appender.Screen.layout     = Log::Log4perl::Layout::PatternLayout
-      log4perl.appender.Screen.layout.ConversionPattern  = [%d{yyyy/MM/dd HH:mm:ss,SSS}]%m%n
+      log4perl.appender.Screen.layout.ConversionPattern  = [%d{yyyy/MM/dd HH:mm:ss,SSS}]%5p> %M line:%L==>%m%n
+	  log4perl.appender.Screen.Filter     = MatchLevelUp
     );
 
     # ... passed as a reference to init()
