@@ -14,7 +14,12 @@ CollectGenomes - Downloads genomes from Ensembl FTP (and NCBI nr db) and builds 
     ### Part I -> download genomes from Ensembl:
     # Step 1: download protists, fungi, metazoa and bacteria (21085)
     perl ./lib/CollectGenomes.pm --mode=ensembl_ftp --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/ensembl_ftp/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
-    # Step2: download vertebrates
+    perl /msestak/gitdir/CollectGenomes/t/ftp_get_bacteria.pl
+
+    # Step 2: download proteomes
+    CollectGenomes.pm --mode=download_from_stats --out=/msestak/workdir/nr_22_03_2017/data/ensembl_ftp/ --infile=/msestak/workdir/nr_22_03_2017/statistics_ensembl_all.txt --tables info=species_ensembl_divisions25579 -ho localhost -d nr_22_03_2017 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock -v -v
+
+    # Step 3: download vertebrates
     #need to scrape HTML to get to taxids in order to download vertebrates from Ensembl (+78 = total 21163) downloaded 67 vertebrates + 2 (S.cerevisiae and C. elegans) + 27 PRE (but duplicates (real 11))
     perl ./lib/CollectGenomes.pm --mode=ensembl_vertebrates --out=/home/msestak/dropbox/Databases/db_02_09_2015/data/ensembl_vertebrates/ -ho localhost -d nr_2015_9_2 -u msandbox -p msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
     #copy ensembl proteomes to ensembl_all (7 min)
