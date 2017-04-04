@@ -76,7 +76,7 @@ our @EXPORT_OK = qw{
 	del_after_analyze
 	manual_add_fasta
 	download_from_stats
-	ensembl_ftp2
+	ensembl_ftp_info
 	
 	};
 
@@ -169,7 +169,7 @@ sub main {
 		del_after_analyze             => \&del_after_analyze,
 		manual_add_fasta              => \&manual_add_fasta,
         download_from_stats           => \&download_from_stats,
-        ensembl_ftp2                  => \&ensembl_ftp2,
+        ensembl_ftp_info              => \&ensembl_ftp_info,
     );
 
 
@@ -5956,7 +5956,7 @@ sub download_from_stats {
 # Throws     : croaks for parameters
 # Comments   : it downloads all proteome locations to stat file
 # See Also   : 
-sub ensembl_ftp2 {
+sub ensembl_ftp_info {
     my $log = Log::Log4perl::get_logger("main");
     $log->logcroak('ensembl_ftp() needs a $param_href') unless @_ == 1;
     my ($param_href) = @_;
@@ -5964,7 +5964,7 @@ sub ensembl_ftp2 {
     my $OUT      = $param_href->{OUT}      or $log->logcroak('no $OUT specified on command line!');
     my $DATABASE = $param_href->{DATABASE} or $log->logcroak('no $DATABASE specified on command line!');
     my $ENGINE = defined $param_href->{ENGINE} ? $param_href->{ENGINE} : 'InnoDB';
-    my $REMOTE_HOST = $param_href->{REMOTE_HOST} //= 'ftp://ftp.ensemblgenomes.org';
+    my $REMOTE_HOST = $param_href->{REMOTE_HOST} //= 'ftp.ensemblgenomes.org';
 
     #get new handle
     my $dbh = dbi_connect($param_href);
@@ -5980,9 +5980,10 @@ sub ensembl_ftp2 {
     #write header to stats file
     print {$stat_fh} "remote_path\tremote_host\tremote_dir_location\tgzip_file\n";
 
-	#create INFO table in database (to import later for each division)
-	my $table_info = "species_ensembl_divisions$$";
-	my $create_info = sprintf( qq{
+    #create INFO table in database (to import later for each division)
+    my $table_info  = "species_ensembl_divisions$$";
+    my $create_info = sprintf(
+        qq{
     CREATE TABLE %s (
 	id INT UNSIGNED AUTO_INCREMENT NOT NULL,
 	species_name VARCHAR(200) NOT NULL,
@@ -6000,134 +6001,81 @@ sub ensembl_ftp2 {
 	core_db VARCHAR(200) NOT NULL,
 	species_id INT UNSIGNED NOT NULL,
 	invis VARCHAR(10),
-    PRIMARY KEY(ti, species),
+    PRIMARY KEY(ti, species_name),
 	KEY(species),
 	KEY(id)
-    )ENGINE=$ENGINE CHARSET=ascii }, $dbh->quote_identifier($table_info) );
-	create_table( { TABLE_NAME => $table_info, DBH => $dbh, QUERY => $create_info, %{$param_href} } );
+    )ENGINE=$ENGINE CHARSET=ascii }, $dbh->quote_identifier($table_info)
+    );
+    create_table( { TABLE_NAME => $table_info, DBH => $dbh, QUERY => $create_info, %{$param_href} } );
 
-	#iterate over genome divisions:
-	my @divisions = qw/metazoa fungi protists plants bacteria/;
-	foreach my $division (@divisions) {
+    #iterate over genome divisions:
+    my @divisions = qw/metazoa fungi protists plants bacteria/;
+    foreach my $division (@divisions) {
 
-		#FIRST:connect to ftp to download info about genomes
-		my $ftp = Net::FTP->new($REMOTE_HOST, Debug => 0) or $log->logdie( "Action: Can't connect to $REMOTE_HOST: $@" );
-    	$ftp->login("anonymous",'msestak@irb.hr')         or $log->logdie( "Action: Can't login ", $ftp->message );
-		$ftp->binary()                                    or $log->logdie( "Opening binary mode data connection failed for $_: $@" );
-		my $remote_path = path('pub', $division, 'current');
-    	$ftp->cwd($remote_path)                           or $log->logdie( "Can't change working directory ", $ftp->message );
+        #FIRST:connect to ftp to download info about genomes
+        my $ftp = Net::FTP->new( $REMOTE_HOST, Debug => 0 )
+          or $log->logdie("Action: Can't connect to $REMOTE_HOST: $@");
+        $ftp->login( "anonymous", 'msestak@irb.hr' ) or $log->logdie( "Action: Can't login ", $ftp->message );
+        $ftp->binary() or $log->logdie("Opening binary mode data connection failed for $_: $@");
+        my $remote_path = path( 'pub', $division, 'current' );
+        $ftp->cwd($remote_path) or $log->logdie( "Can't change working directory ", $ftp->message );
 
-		#get info file
-		INFO:
-		foreach my $info_file ($ftp->ls) {
-			my $info_name = 'species_Ensembl' . ucfirst($division) . '.txt';
-			#say $info_file;
-			next INFO unless $info_file eq $info_name;
-			if ($info_file eq $info_name) {
-				$log->trace( "Action: working on $division found $info_file" );
-			}
+        #get info file
+      INFO:
+        foreach my $info_file ( $ftp->ls ) {
+            my $info_name = 'species_Ensembl' . ucfirst($division) . '.txt';
 
-			#download and import to db
-			#delete info file if it exists
-			my $info_local = path(path($OUT)->parent, $info_file);
-			if (-f $info_local) {
-				unlink $info_local and $log->warn( "Action: unlinked $info_local" );
-			}
-		
-			#opens a filehandle to $OUT dir and downloads file there
-			open my $local_info_fh, ">>", $info_local or $log->logdie( "Can't write to $info_local:$!" );
-			$ftp->get($info_file, $local_info_fh) and $log->info( "Action: download to $info_local" );
-			#print $local_info_fh "\n";
-			close $local_info_fh;
+            #say $info_file;
+            next INFO unless $info_file eq $info_name;
+            if ( $info_file eq $info_name ) {
+                $log->trace("Action: working on $division found $info_file");
+            }
 
-			#INSERT info files one after another
-    		my $load_info = qq{
-    		LOAD DATA INFILE '$info_local'
-			INTO TABLE $table_info
-			IGNORE 1 LINES
-			(species_name, species, division, ti, assembly, assembly_accession, genebuild, variation, pan_compara, peptide_compara, genome_alignments, other_alignments, core_db, species_id, invis)
-    		};
-    		eval { $dbh->do($load_info, { async => 1 } ) };
-			my $rows_info = $dbh->mysql_async_result;
-    		$log->debug( "Action: $table_info loaded with $rows_info rows!" ) unless $@;
-    		$log->debug( "Action: loading $table_info failed: $@" ) if $@;
+            #download and import to db
+            #delete info file if it exists
+            my $info_local = path( path($OUT)->parent, $info_file );
+            if ( -f $info_local ) {
+                unlink $info_local and $log->warn("Action: unlinked $info_local");
+            }
 
-			#DELETE genomes with same tax_ids
-			my $delete_dup = qq{
-			DELETE ens FROM $table_info AS ens
-			INNER JOIN $table_info AS ens2 ON ens.ti = ens2.ti
-			WHERE ens.id > ens2.id};
-    		eval { $dbh->do($delete_dup, { async => 1 } ) };
-			my $rows_dup = $dbh->mysql_async_result;
-    		$log->debug( "Action: $table_info deleted with $rows_dup rows!" ) unless $@;
-    		$log->debug( "Action: delete $table_info failed: $@" ) if $@;
+            #opens a filehandle to $OUT dir and downloads file there
+            open my $local_info_fh, ">>", $info_local or $log->logdie("Can't write to $info_local:$!");
+            $ftp->get( $info_file, $local_info_fh ) and $log->info("Action: download to $info_local");
 
+            #print $local_info_fh "\n";
+            close $local_info_fh;
 
-		}
-		$ftp->quit;   #restart for every division
-	}
+            #INSERT info files one after another
+            my $load_info = qq{
+            LOAD DATA INFILE '$info_local'
+            INTO TABLE $table_info
+            IGNORE 1 LINES
+            (species_name, species, division, ti, assembly, assembly_accession, genebuild, variation, pan_compara,
+            peptide_compara, genome_alignments, other_alignments, core_db, species_id, invis)
+            };
+            eval { $dbh->do( $load_info, { async => 1 } ) };
+            my $rows_info = $dbh->mysql_async_result;
+            $log->debug("Action: $table_info loaded with $rows_info rows!") unless $@;
+            $log->debug("Action: loading $table_info failed: $@") if $@;
 
-	#SECOND
-	#iterate over genome divisions for genome download:
-	my @division = qw/protists fungi metazoa plants bacteria/;
-	DIVISION:
-	foreach my $division (@division) {
-		$log->error( qq|Report: working on $division division| );   #just for show red
-		sleep 1;
+            ##DELETE genomes with same tax_ids
+            #my $delete_dup = qq{
+            #DELETE ens FROM $table_info AS ens
+            #INNER JOIN $table_info AS ens2 ON ens.ti = ens2.ti
+            #WHERE ens.id > ens2.id};
+            #eval { $dbh->do( $delete_dup, { async => 1 } ) };
+            #my $rows_dup = $dbh->mysql_async_result;
+            #$log->debug("Action: $table_info deleted with $rows_dup rows!") unless $@;
+            #$log->debug("Action: delete $table_info failed: $@") if $@;
 
-		#connect to ftp to download genomes
-		my $ftp;
-		#$ftp->quit and $log->error( "Action: closing ftp connection for $division" );   #restart for every division
-		$ftp = Net::FTP::AutoReconnect->new($REMOTE_HOST, Debug => 0) or $log->logdie( "Action: Can't connect to $REMOTE_HOST: $@" );
-    	$ftp->login("anonymous",'msestak@irb.hr')         or $log->logdie( "Action: Can't login ", $ftp->message );
-		$ftp->binary()                                    or $log->logdie( "Opening binary mode data connection failed for $_: $@" );
-		my $remote_path = path('pub', $division, 'current', 'fasta');
-    	$ftp->cwd($remote_path)                           or $log->logdie( "Can't change working directory ", $ftp->message );
-		$ftp->pasv()                                   or $log->logdie( "Opening passive mode data connection failed for $_: $@" );
-		$log->trace("Report: location: ", $ftp->pwd() );
+        }
+        $ftp->quit;    #restart for every division
+    }
 
-		my @species_listing = $ftp->ls;
-		DIR:
-		foreach my $species_dir_out (@species_listing) {
-			#$log->trace("Action: working with $species_dir_out" );
-			#$log->trace("Report: location: ", $ftp->pwd() );
-			if ($species_dir_out eq 'ancestral_alleles') {
-				$log->trace( "Action: ancestral_alleles skipped" );
-				next DIR;
-			}
+    close $stat_fh;    #collects all divisions
+    $dbh->disconnect;
 
-			#for testing (smaller dataset)
-			#if ($species_dir_out =~ m/\A[a-e].+\z/) {
-			#	next DIR and $log->trace( "Action: $species_dir_out skipped" );
-			#}
-
-			if ($species_dir_out =~ m/collection/g) {
-				$ftp->cwd($species_dir_out) and $log->warn( qq|Action: cwd to $species_dir_out: working inside collection| );
-				my @collection_listing = $ftp->ls;
-				foreach my $species_in_coll (@collection_listing) {
-					#crucial to send $ftp to the sub (else it uses old one from previous division)
-            		ftp_get_proteome(
-            		    { DIR => $species_in_coll, FTP => $ftp, TABLE => $table_info, DBH => $dbh, %{$param_href} } );
-				}
-				$ftp->cdup() and $log->warn( qq|Action: cwd out of collection: $species_dir_out| );
-			}
-			else {
-				#normal ftp (outside collection)
-				#crucial to send $ftp to the sub (else it uses old one from previous division)
-            	ftp_get_proteome(
-            	    { DIR => $species_dir_out, FTP => $ftp, TABLE => $table_info, DBH => $dbh, %{$param_href} } );
-			}
-			
-		}   #foreach DIR inside division end
-			$log->error( "Action: closing ftp connection for $division" );   #restart for every division
-
-		$ftp->quit and next DIVISION;
-	}   #division end
-
-	close $stat_fh;   #collects all divisions
-	$dbh->disconnect;
-
-	return;
+    return;
 }
 
 ### INTERNAL UTILITY ###
